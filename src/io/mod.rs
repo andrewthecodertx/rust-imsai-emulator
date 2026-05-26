@@ -8,6 +8,12 @@ pub struct IoController {
     pub video: VideoDisplay,
 }
 
+impl Default for IoController {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl IoController {
     /// Create a new I/O controller
     pub fn new() -> Self {

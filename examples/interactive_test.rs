@@ -13,8 +13,8 @@ fn main() {
     println!("==========================================");
 
     // Create I/O components
-    let mut keyboard = Keyboard::new();
-    let mut video = VideoDisplay::new(80, 24);
+    let keyboard = Keyboard::new();
+    let video = VideoDisplay::new(80, 24);
 
     // Create a simple I/O controller
     let io_controller = IoController { keyboard, video };

@@ -14,6 +14,12 @@ pub struct Keyboard {
     position: usize,
 }
 
+impl Default for Keyboard {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Keyboard {
     /// Create a new keyboard controller
     pub fn new() -> Self {

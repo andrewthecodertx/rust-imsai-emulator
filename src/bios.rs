@@ -12,6 +12,12 @@ pub struct Bios {
     io_controller: IoController,
 }
 
+impl Default for Bios {
+    fn default() -> Self {
+        Self::new(IoController::default())
+    }
+}
+
 impl Bios {
     /// Create a new BIOS instance
     pub fn new(io_controller: IoController) -> Self {

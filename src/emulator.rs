@@ -17,16 +17,22 @@ pub struct Imsai8080 {
     pub bios: Bios,
 }
 
+impl Default for Imsai8080 {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Imsai8080 {
     /// Create a new IMSAI 8080 emulator instance
     pub fn new() -> Self {
         let io = IoController::new();
-        let bios = Bios::new(io);
+        let bios = Bios::new(IoController::new());
 
         Self {
             cpu: Cpu8080::new(),
             memory: Memory::new(),
-            io: IoController::new(),
+            io,
             bios,
         }
     }

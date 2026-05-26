@@ -6,6 +6,12 @@ pub struct Memory {
     ram: [u8; 65536],
 }
 
+impl Default for Memory {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Memory {
     /// Create a new memory instance
     pub fn new() -> Self {

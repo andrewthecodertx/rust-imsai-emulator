@@ -9,6 +9,12 @@ use std::path::Path;
 /// CP/M system loader
 pub struct CpMLoader;
 
+impl Default for CpMLoader {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CpMLoader {
     /// Create a new CP/M loader
     pub fn new() -> Self {
@@ -80,8 +86,7 @@ mod tests {
 
     #[test]
     fn test_cpm_loader_creation() {
-        let loader = CpMLoader::new();
-        assert!(true); // Just test that we can create the loader
+        let _loader = CpMLoader::new();
     }
 
     #[test]
