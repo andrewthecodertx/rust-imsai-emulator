@@ -6,6 +6,8 @@
 
 #![warn(missing_docs)]
 
+/// S-100 system bus
+pub mod bus;
 /// BIOS implementation
 pub mod bios;
 /// CP/M loader and execution
@@ -21,6 +23,7 @@ pub mod system;
 
 // Re-export the main components
 pub use bios::Bios;
+pub use bus::ImsaiBus;
 pub use cpm::CpMLoader;
 pub use emulator::Imsai8080;
 pub use memory::Memory;

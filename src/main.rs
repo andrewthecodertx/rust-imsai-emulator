@@ -1,28 +1,42 @@
-use rust_imsai_emulator::{io::IoController, Bios};
+use rust_imsai_emulator::{Bios, Imsai8080};
 
 fn main() {
-    // Create a simple test of our components
-    let io = IoController::new();
-    let mut bios = Bios::new(io);
+    let mut emu = Imsai8080::new();
 
-    println!("Testing BIOS and I/O components:");
+    // Install the CP/M BIOS jump table into memory
+    Bios::install_jump_table(&mut emu.bus);
 
-    // Initialize BIOS
-    bios.initialize();
+    // Pre-load a simple test program:
+    // MVI A, 'H' ; OUT 0x00 ; ... repeat for "Hello"
+    // HALT
+    let program: Vec<u8> = vec![
+        0x3E, b'H',       // MVI A,'H'
+        0xD3, 0x00,        // OUT 0x00
+        0x3E, b'e',       // MVI A,'e'
+        0xD3, 0x00,        // OUT 0x00
+        0x3E, b'l',       // MVI A,'l'
+        0xD3, 0x00,        // OUT 0x00
+        0x3E, b'l',       // MVI A,'l'
+        0xD3, 0x00,        // OUT 0x00
+        0x3E, b'o',       // MVI A,'o'
+        0xD3, 0x00,        // OUT 0x00
+        0x76,               // HALT
+    ];
 
-    // Test keyboard functionality
-    println!("Checking keyboard status...");
-    let status = bios.const_func();
-    println!("Keyboard status: 0x{:02X}", status);
+    emu.load_program(0x0200, &program);
+    emu.cpu.pc = 0x0200;
 
-    // Test video output
-    println!("Writing 'Hello' to display...");
-    bios.conout_func(b'H');
-    bios.conout_func(b'e');
-    bios.conout_func(b'l');
-    bios.conout_func(b'l');
-    bios.conout_func(b'o');
-    bios.conout_func(b'\n');
+    println!("IMSAI 8080 Emulator Started");
+    println!("CPU: {:?}", emu.cpu);
 
-    println!("Tests completed.");
+    // Run until halted
+    loop {
+        emu.step();
+        if emu.cpu.halted {
+            break;
+        }
+    }
+
+    println!("\nEmulation complete. CPU halted.");
+    println!("Final CPU state: {:?}", emu.cpu);
 }

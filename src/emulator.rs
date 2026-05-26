@@ -1,20 +1,14 @@
 //! Main emulator implementation
 
-use crate::bios::Bios;
-use crate::io::IoController;
-use crate::memory::Memory;
+use crate::bus::ImsaiBus;
 use intel8080::Cpu8080;
 
-/// The main IMSAI 8080 emulator system
+/// The IMSAI 8080 emulator system
 pub struct Imsai8080 {
-    /// The Intel 8080 CPU core
+    /// The Intel 8080 CPU
     pub cpu: Cpu8080,
-    /// The memory subsystem
-    pub memory: Memory,
-    /// The I/O controller
-    pub io: IoController,
-    /// The BIOS implementation
-    pub bios: Bios,
+    /// The system bus (memory + I/O)
+    pub bus: ImsaiBus,
 }
 
 impl Default for Imsai8080 {
@@ -26,37 +20,26 @@ impl Default for Imsai8080 {
 impl Imsai8080 {
     /// Create a new IMSAI 8080 emulator instance
     pub fn new() -> Self {
-        let io = IoController::new();
-        let bios = Bios::new(IoController::new());
-
         Self {
             cpu: Cpu8080::new(),
-            memory: Memory::new(),
-            io,
-            bios,
+            bus: ImsaiBus::new(),
         }
     }
 
-    /// Initialize the emulator
-    pub fn initialize(&mut self) {
-        self.bios.initialize();
+    /// Load a program binary into memory
+    pub fn load_program(&mut self, start: u16, data: &[u8]) {
+        self.bus.load(start, data);
     }
 
-    /// Run the emulator
-    pub fn run(&mut self) {
-        self.initialize();
-        println!("IMSIAI 8080 Emulator Started");
-        println!("CPU Status: {:?}", self.cpu);
+    /// Execute a single CPU instruction
+    pub fn step(&mut self) -> u32 {
+        self.cpu.step(&mut self.bus)
+    }
 
-        // Simulate typing some text to demonstrate keyboard input
-        self.io.keyboard.type_text("Hello, CP/M!\n");
-
-        // Simulate writing some text to demonstrate video output
-        self.bios.conout_func(b'H');
-        self.bios.conout_func(b'e');
-        self.bios.conout_func(b'l');
-        self.bios.conout_func(b'l');
-        self.bios.conout_func(b'o');
-        self.bios.conout_func(b'\n');
+    /// Run for a given number of instructions
+    pub fn run_steps(&mut self, count: u32) {
+        for _ in 0..count {
+            self.step();
+        }
     }
 }

@@ -1,58 +1,46 @@
 //! Interactive test example for the IMSAI 8080 emulator
 //!
-//! This example demonstrates interactive keyboard input and video output
-//! capabilities of the emulator.
+//! Loads a simple echo program that reads from port 0 and writes to port 0,
+//! then feeds it simulated keyboard input.
 
-use rust_imsai_emulator::{
-    bios::Bios,
-    io::{IoController, Keyboard, VideoDisplay},
-};
+use rust_imsai_emulator::{Bios, Imsai8080};
 
 fn main() {
-    println!("Interactive test for IMSAI 8080 emulator");
-    println!("==========================================");
+    let mut emu = Imsai8080::new();
 
-    // Create I/O components
-    let keyboard = Keyboard::new();
-    let video = VideoDisplay::new(80, 24);
+    // Install BIOS jump table
+    Bios::install_jump_table(&mut emu.bus);
 
-    // Create a simple I/O controller
-    let io_controller = IoController { keyboard, video };
+    // Echo program:
+    // LOOP: IN 0x01      ; check keyboard status
+    //       ANI 0x01     ; test bit 0
+    //       JZ LOOP      ; spin if no key ready
+    //       IN 0x00      ; read character
+    //       OUT 0x00     ; echo it back
+    //       JMP LOOP     ; repeat
+    let program: Vec<u8> = vec![
+        0xDB, 0x01,       // IN 0x01
+        0xE6, 0x01,       // ANI 0x01
+        0xCA, 0x00, 0x02, // JZ 0x0200
+        0xDB, 0x00,       // IN 0x00
+        0xD3, 0x00,       // OUT 0x00
+        0xC3, 0x00, 0x02, // JMP 0x0200
+    ];
 
-    // Create BIOS
-    let mut bios = Bios::new(io_controller);
+    emu.load_program(0x0200, &program);
+    emu.cpu.pc = 0x0200;
 
-    // Initialize
-    bios.initialize();
+    // Simulate typing some text
+    emu.bus.io.keyboard.type_text("Hi!\n");
 
-    // Show welcome message
-    println!("Welcome to the IMSAI 8080 emulator interactive test!");
-    println!("Type some text and press Enter to see it displayed.");
-    println!("Type 'quit' to exit.\n");
+    println!("IMSAI 8080 Interactive Test");
+    println!("Running echo program with simulated input: \"Hi!\\n\"");
 
-    // Simple interactive loop
-    loop {
-        // Simulate checking for keyboard input
-        if bios.const_func() == 0xFF {
-            // Character ready, read it
-            let ch = bios.conin_func();
-
-            // Echo to display
-            bios.conout_func(ch);
-
-            // Check for quit command (simplified)
-            if ch == b'q' || ch == b'Q' {
-                break;
-            }
-        }
-
-        // In a real implementation, we'd handle actual keyboard input
-        // For this demo, we'll just simulate some input periodically
-        // In practice, you would integrate with actual stdin/stdout
-
-        // Sleep briefly to avoid busy waiting
-        std::thread::sleep(std::time::Duration::from_millis(100));
+    // Run a limited number of steps (the echo program loops forever)
+    for _ in 0..200 {
+        emu.step();
     }
 
-    println!("\nInteractive test completed.");
+    println!("\nTest complete (ran 200 steps).");
+    println!("Display contents:\n{}", emu.bus.io.video.get_display_string());
 }
