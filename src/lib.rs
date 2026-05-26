@@ -8,10 +8,14 @@
 
 /// S-100 system bus
 pub mod bus;
-/// BIOS implementation
+/// BIOS implementation (simplified, for basic console I/O)
 pub mod bios;
+/// CP/M 2.2 BIOS implementation (full 17-call BIOS with Tarbell controller)
+pub mod cpm_bios;
 /// CP/M loader and execution
 pub mod cpm;
+/// Disk parameter block definitions
+pub mod dpb;
 /// The main emulator system
 pub mod emulator;
 /// I/O subsystem
@@ -25,6 +29,7 @@ pub mod system;
 pub use bios::Bios;
 pub use bus::ImsaiBus;
 pub use cpm::CpMLoader;
+pub use cpm_bios::CpmBios;
 pub use emulator::Imsai8080;
 pub use memory::Memory;
 
