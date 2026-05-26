@@ -1,4 +1,8 @@
 //! I/O subsystem for the IMSAI 8080 emulator
+//!
+//! The I/O controller manages all peripheral devices on the S-100 bus:
+//! - Console (keyboard + video display via ports 0x00-0x01)
+//! - Tarbell floppy disk controller (ports 0x48-0x4B)
 
 /// I/O controller for the IMSAI 8080
 pub struct IoController {
@@ -6,6 +10,8 @@ pub struct IoController {
     pub keyboard: Keyboard,
     /// Video display controller
     pub video: VideoDisplay,
+    /// Tarbell floppy disk controller
+    pub tarbell: TarbellController,
 }
 
 impl Default for IoController {
@@ -19,21 +25,22 @@ impl IoController {
     pub fn new() -> Self {
         Self {
             keyboard: Keyboard::new(),
-            video: VideoDisplay::new(80, 24), // Standard 80x24 text display
+            video: VideoDisplay::new(80, 24),
+            tarbell: TarbellController::new(),
         }
     }
 
     /// Initialize the I/O system
     pub fn initialize(&mut self) {
-        // Clear the display
         self.video.clear();
-        // Render the initial blank display
         self.video.render();
     }
 }
 
 mod keyboard;
+mod tarbell;
 mod video;
 
 pub use keyboard::Keyboard;
+pub use tarbell::TarbellController;
 pub use video::VideoDisplay;

@@ -5,15 +5,25 @@
 //!
 //! - Port 0x00: Console data (read: keyboard, write: display)
 //! - Port 0x01: Console status (read: bit 0 = key ready, bit 1 = display ready)
+//! - Port 0x48: Tarbell disk controller: command/status register
+//! - Port 0x49: Tarbell disk controller: track register
+//! - Port 0x4A: Tarbell disk controller: sector register
+//! - Port 0x4B: Tarbell disk controller: data register
 
 use intel8080::Bus;
 
 use crate::io::IoController;
 use crate::memory::Memory;
 
-/// I/O port addresses
-const PORT_CONSOLE_DATA: u8 = 0x00;
-const PORT_CONSOLE_STATUS: u8 = 0x01;
+/// Console data port
+pub const PORT_CONSOLE_DATA: u8 = 0x00;
+/// Console status port
+pub const PORT_CONSOLE_STATUS: u8 = 0x01;
+
+/// Tarbell controller port base
+const TARBELL_BASE: u8 = 0x48;
+/// Tarbell controller port count (4 ports: 0x48-0x4B)
+const TARBELL_COUNT: u8 = 4;
 
 /// Status register bits
 const STATUS_KEY_READY: u8 = 0x01;
@@ -23,7 +33,7 @@ const STATUS_DISPLAY_READY: u8 = 0x02;
 pub struct ImsaiBus {
     /// 64KB addressable memory
     pub memory: Memory,
-    /// I/O controller (keyboard + display)
+    /// I/O controller (keyboard, display, disk)
     pub io: IoController,
 }
 
@@ -69,14 +79,23 @@ impl Bus for ImsaiBus {
                 }
                 status
             }
-            _ => 0x00,
+            p if (TARBELL_BASE..TARBELL_BASE + TARBELL_COUNT).contains(&p) => {
+                self.io.tarbell.io_in(p)
+            }
+            _ => 0xFF,
         }
     }
 
     fn io_out(&mut self, port: u8, value: u8) {
-        if port == PORT_CONSOLE_DATA {
-            self.io.video.write_char(value);
-            self.io.video.render();
+        match port {
+            PORT_CONSOLE_DATA => {
+                self.io.video.write_char(value);
+                self.io.video.render();
+            }
+            p if (TARBELL_BASE..TARBELL_BASE + TARBELL_COUNT).contains(&p) => {
+                self.io.tarbell.io_out(p, value);
+            }
+            _ => {}
         }
     }
 }

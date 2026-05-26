@@ -13,11 +13,7 @@
 //! | READER   | C=9      | Read from reader device |
 //! | LISTST   | C=11     | Check list device status |
 
-use crate::bus::ImsaiBus;
-
-/// I/O port addresses (shared with bus.rs)
-const PORT_CONSOLE_DATA: u8 = 0x00;
-const PORT_CONSOLE_STATUS: u8 = 0x01;
+use crate::bus::{ImsaiBus, PORT_CONSOLE_DATA, PORT_CONSOLE_STATUS};
 
 /// BIOS entry points in the CP/M jump table
 const NUM_BIOS_ENTRIES: usize = 6;
