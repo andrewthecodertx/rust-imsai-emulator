@@ -40,15 +40,15 @@ pub const AL0: u8 = 0xC0;
 /// Directory allocation bits, low byte
 pub const AL1: u8 = 0x00;
 /// Check vector size (directory entry bytes for hashing)
-pub const CKS: u16 = 8;
+pub const CKS: u16 = 16;
 /// Number of reserved (system) tracks
-pub const OFF: u16 = 6;
+pub const OFF: u16 = 2;
 /// Bytes per sector
 pub const SECTOR_SIZE: usize = 128;
 /// Bytes per allocation block
 pub const BLOCK_SIZE: usize = 1024;
 /// Number of reserved tracks (same as OFF, here for clarity)
-pub const RESERVED_TRACKS: u8 = 6;
+pub const RESERVED_TRACKS: u8 = 2;
 /// Total tracks per disk
 pub const TOTAL_TRACKS: u8 = 77;
 /// Directory entries
@@ -154,8 +154,8 @@ mod tests {
         assert_eq!(dpb.drm, 63);
         assert_eq!(dpb.al0, 0xC0);
         assert_eq!(dpb.al1, 0x00);
-        assert_eq!(dpb.cks, 8);
-        assert_eq!(dpb.off, 6);
+        assert_eq!(dpb.cks, 16);
+        assert_eq!(dpb.off, 2);
     }
 
     #[test]
@@ -181,25 +181,25 @@ mod tests {
         // AL0 = 0xC0, AL1 = 0x00
         assert_eq!(bytes[9], 0xC0);
         assert_eq!(bytes[10], 0x00);
-        // CKS = 8
-        assert_eq!(bytes[11], 0x08);
+        // CKS = 16
+        assert_eq!(bytes[11], 0x10);
         assert_eq!(bytes[12], 0x00);
-        // OFF = 6
-        assert_eq!(bytes[13], 0x06);
+        // OFF = 2
+        assert_eq!(bytes[13], 0x02);
         assert_eq!(bytes[14], 0x00);
     }
 
     #[test]
     fn test_dpb_reserved_sectors() {
         let dpb = DiskParameterBlock::tarbell_standard();
-        // 6 reserved tracks * 26 sectors = 156 sectors
-        assert_eq!(dpb.reserved_sectors(), 156);
+        // 2 reserved tracks * 26 sectors = 52 sectors
+        assert_eq!(dpb.reserved_sectors(), 52);
     }
 
     #[test]
     fn test_dpb_data_capacity() {
         let dpb = DiskParameterBlock::tarbell_standard();
-        // 71 data tracks * 26 sectors * 128 bytes = 236,288 bytes
-        assert_eq!(dpb.data_capacity(), 236_288);
+        // 75 data tracks * 26 sectors * 128 bytes = 249,600 bytes
+        assert_eq!(dpb.data_capacity(), 249_600);
     }
 }

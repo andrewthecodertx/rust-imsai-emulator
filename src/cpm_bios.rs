@@ -536,8 +536,8 @@ mod tests {
         // BSH should be 3
         assert_eq!(bus.memory.read(DPB_ADDRESS + 2), 3);
 
-        // OFF should be 6
-        assert_eq!(bus.memory.read(DPB_ADDRESS + 13), 0x06);
+        // OFF should be 2
+        assert_eq!(bus.memory.read(DPB_ADDRESS + 13), 0x02);
         assert_eq!(bus.memory.read(DPB_ADDRESS + 14), 0x00);
     }
 
