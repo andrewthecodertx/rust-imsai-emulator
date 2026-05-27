@@ -14,6 +14,8 @@ pub mod bios;
 pub mod cpm_bios;
 /// CP/M loader and execution
 pub mod cpm;
+/// CP/M disk image creation and management
+pub mod disk;
 /// Disk parameter block definitions
 pub mod dpb;
 /// The main emulator system
@@ -30,7 +32,9 @@ pub use bios::Bios;
 pub use bus::ImsaiBus;
 pub use cpm::CpMLoader;
 pub use cpm_bios::CpmBios;
+pub use disk::DiskImage;
 pub use emulator::Imsai8080;
+pub use io::TarbellController;
 pub use memory::Memory;
 
 /// Create a new IMSAI 8080 emulator instance

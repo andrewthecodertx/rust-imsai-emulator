@@ -17,33 +17,17 @@
 //! The controller supports 8-inch single-density floppy disks with the
 //! standard IBM 3740 format: 77 tracks, 26 sectors per track, 128 bytes
 //! per sector, for a total of 243,712 bytes per disk.
-//!
-//! CP/M 2.2 for the Tarbell controller uses the following disk layout:
-//! - Track 0: reserved (boot + CP/M system)
-//! - Track 1-2: CP/M system tracks
-//! - Track 2-76: data area (directory + files)
-//! - Single 128-byte logical sector numbering (no skew translation
-//!   at the BIOS level for CP/M; physical skew handled by controller)
 
 #![allow(dead_code)]
 
-use std::fs;
-use std::path::Path;
+use crate::disk::DiskImage;
+use crate::dpb::SECTOR_SIZE;
 
 /// I/O port base address for the Tarbell controller (standard default)
 const TARBELL_PORT_BASE: u8 = 0x48;
 
 /// Number of I/O ports the Tarbell controller occupies
 const TARBELL_PORT_COUNT: usize = 4;
-
-/// Command register port offset
-const CMD_STATUS: u8 = 0;
-/// Track register port offset
-const TRACK: u8 = 1;
-/// Sector register port offset
-const SECTOR: u8 = 2;
-/// Data register port offset
-const DATA: u8 = 3;
 
 /// FD1771 command bits
 const CMD_RESTORE: u8 = 0x00;
@@ -60,162 +44,16 @@ const CMD_FORCE_INTERRUPT: u8 = 0xD0;
 
 /// Command type mask (upper 4 bits)
 const CMD_TYPE_MASK: u8 = 0xF0;
-/// Update flag (bit 0 in step-type commands)
-const CMD_UPDATE_FLAG: u8 = 0x01;
 
 /// Status register bits
 const STATUS_NOT_READY: u8 = 0x80;
 const STATUS_WRITE_PROTECT: u8 = 0x40;
-const STATUS_RECORD_TYPE: u8 = 0x20;
-const STATUS_SECTOR_ZERO: u8 = 0x02;
 const STATUS_BUSY: u8 = 0x01;
-const STATUS_INDEX: u8 = 0x02;
-
-/// Standard 8-inch floppy geometry (IBM 3740 format)
-const TRACKS_PER_DISK: u8 = 77;
-const SECTORS_PER_TRACK: u8 = 26;
-const BYTES_PER_SECTOR: usize = 128;
-const BYTES_PER_DISK: usize = TRACKS_PER_DISK as usize
-    * SECTORS_PER_TRACK as usize
-    * BYTES_PER_SECTOR;
-
-/// Physical sector numbers on an IBM 3740 disk run from 1 to 26,
-/// but CP/M addresses them as logical sectors 0-25. The standard
-/// physical-to-logical mapping for the Tarbell controller uses
-/// a 6:1 interleave (physical sector 1 = logical 0, physical 7 = logical 1, etc.)
-const SECTOR_SKEW_TABLE: [u8; SECTORS_PER_TRACK as usize] = [
-    1, 7, 13, 19, 25, 5, 11, 17, 23, 3, 9, 15, 21, 2, 8, 14, 20, 26, 6, 12, 18, 24, 4, 10, 16,
-    22,
-];
-
-/// A single floppy disk image
-struct FloppyDisk {
-    /// Raw disk data (243,712 bytes for a full 77-track image)
-    data: Vec<u8>,
-    /// Whether this disk is write-protected
-    write_protected: bool,
-}
-
-impl FloppyDisk {
-    /// Create a blank (zeroed) disk image
-    fn new_blank() -> Self {
-        Self {
-            data: vec![0xE5; BYTES_PER_DISK],
-            write_protected: false,
-        }
-    }
-
-    /// Load a disk image from a file
-    fn load(path: &Path) -> Result<Self, String> {
-        let data = fs::read(path).map_err(|e| format!("Failed to read disk image: {}", e))?;
-        if data.len() != BYTES_PER_DISK {
-            return Err(format!(
-                "Disk image size mismatch: expected {} bytes, got {}",
-                BYTES_PER_DISK,
-                data.len()
-            ));
-        }
-        Ok(Self {
-            data,
-            write_protected: false,
-        })
-    }
-
-    /// Read a sector from the disk
-    fn read_sector(&self, track: u8, sector: u8) -> Result<[u8; BYTES_PER_SECTOR], String> {
-        if track >= TRACKS_PER_DISK {
-            return Err(format!("Track {} out of range (0-{})", track, TRACKS_PER_DISK - 1));
-        }
-        if sector == 0 || sector > SECTORS_PER_TRACK {
-            return Err(format!(
-                "Sector {} out of range (1-{})",
-                sector,
-                SECTORS_PER_TRACK
-            ));
-        }
-
-        let offset = (track as usize * SECTORS_PER_TRACK as usize + (sector - 1) as usize)
-            * BYTES_PER_SECTOR;
-        let mut buf = [0u8; BYTES_PER_SECTOR];
-        buf.copy_from_slice(&self.data[offset..offset + BYTES_PER_SECTOR]);
-        Ok(buf)
-    }
-
-    /// Write a sector to the disk
-    fn write_sector(
-        &mut self,
-        track: u8,
-        sector: u8,
-        data: &[u8; BYTES_PER_SECTOR],
-    ) -> Result<(), String> {
-        if self.write_protected {
-            return Err("Disk is write-protected".into());
-        }
-        if track >= TRACKS_PER_DISK {
-            return Err(format!("Track {} out of range (0-{})", track, TRACKS_PER_DISK - 1));
-        }
-        if sector == 0 || sector > SECTORS_PER_TRACK {
-            return Err(format!(
-                "Sector {} out of range (1-{})",
-                sector,
-                SECTORS_PER_TRACK
-            ));
-        }
-
-        let offset = (track as usize * SECTORS_PER_TRACK as usize + (sector - 1) as usize)
-            * BYTES_PER_SECTOR;
-        self.data[offset..offset + BYTES_PER_SECTOR].copy_from_slice(data);
-        Ok(())
-    }
-
-    /// Read a sector using CP/M logical sector numbering (0-25)
-    fn read_logical_sector(
-        &self,
-        track: u8,
-        logical_sector: u8,
-    ) -> Result<[u8; BYTES_PER_SECTOR], String> {
-        // Convert logical sector to physical sector using skew table
-        let physical = logical_to_physical(logical_sector);
-        self.read_sector(track, physical)
-    }
-
-    /// Write a sector using CP/M logical sector numbering (0-25)
-    fn write_logical_sector(
-        &mut self,
-        track: u8,
-        logical_sector: u8,
-        data: &[u8; BYTES_PER_SECTOR],
-    ) -> Result<(), String> {
-        let physical = logical_to_physical(logical_sector);
-        self.write_sector(track, physical, data)
-    }
-}
-
-/// Convert a CP/M logical sector number (0-25) to a physical sector number (1-26)
-fn logical_to_physical(logical: u8) -> u8 {
-    if (logical as usize) < SECTOR_SKEW_TABLE.len() {
-        SECTOR_SKEW_TABLE[logical as usize]
-    } else {
-        // Should not happen with valid CP/M calls
-        logical + 1
-    }
-}
-
-/// Convert a physical sector number (1-26) to a CP/M logical sector number (0-25)
-fn physical_to_logical(physical: u8) -> u8 {
-    for (logical, &phys) in SECTOR_SKEW_TABLE.iter().enumerate() {
-        if phys == physical {
-            return logical as u8;
-        }
-    }
-    // Should not happen
-    physical.saturating_sub(1)
-}
 
 /// The Tarbell floppy disk controller
 pub struct TarbellController {
     /// Floppy disk drives (up to 4 drives, A-D)
-    drives: [Option<FloppyDisk>; 4],
+    drives: [Option<DiskImage>; 4],
     /// Currently selected drive (0-3)
     current_drive: u8,
     /// Track register (current track position)
@@ -227,7 +65,7 @@ pub struct TarbellController {
     /// Status register
     status: u8,
     /// Sector data buffer for read/write operations
-    sector_buffer: [u8; BYTES_PER_SECTOR],
+    sector_buffer: [u8; SECTOR_SIZE],
     /// Current byte position within the sector buffer during read/write
     buffer_position: usize,
     /// Whether a read operation is in progress
@@ -253,8 +91,8 @@ impl TarbellController {
             track_register: 0,
             sector_register: 1,
             data_register: 0,
-            status: STATUS_NOT_READY, // No disk = not ready
-            sector_buffer: [0; BYTES_PER_SECTOR],
+            status: STATUS_NOT_READY,
+            sector_buffer: [0; SECTOR_SIZE],
             buffer_position: 0,
             reading: false,
             writing: false,
@@ -267,26 +105,65 @@ impl TarbellController {
         if drive > 3 {
             return Err("Drive number must be 0-3".into());
         }
-        let disk = FloppyDisk::load(Path::new(path))?;
+        let disk = DiskImage::load(std::path::Path::new(path))?;
         self.drives[drive] = Some(disk);
-        // If this is the current drive, update status
         if drive == self.current_drive as usize {
             self.status &= !STATUS_NOT_READY;
         }
         Ok(())
     }
 
-    /// Insert a blank disk into a drive (0-3)
-    pub fn insert_blank_disk(&mut self, drive: usize) -> Result<(), String> {
+    /// Insert a DiskImage directly into a drive
+    pub fn insert_disk_image(&mut self, drive: usize, disk: DiskImage) -> Result<(), String> {
         if drive > 3 {
             return Err("Drive number must be 0-3".into());
         }
-        let disk = FloppyDisk::new_blank();
         self.drives[drive] = Some(disk);
         if drive == self.current_drive as usize {
             self.status &= !STATUS_NOT_READY;
         }
         Ok(())
+    }
+
+    /// Insert a blank formatted disk into a drive (0-3)
+    pub fn insert_blank_disk(&mut self, drive: usize) -> Result<(), String> {
+        if drive > 3 {
+            return Err("Drive number must be 0-3".into());
+        }
+        let disk = DiskImage::new_formatted();
+        self.drives[drive] = Some(disk);
+        if drive == self.current_drive as usize {
+            self.status &= !STATUS_NOT_READY;
+        }
+        Ok(())
+    }
+
+    /// Eject the disk from a drive
+    pub fn eject_disk(&mut self, drive: usize) -> Option<DiskImage> {
+        if drive > 3 {
+            return None;
+        }
+        let disk = self.drives[drive].take();
+        if drive == self.current_drive as usize {
+            self.status |= STATUS_NOT_READY;
+        }
+        disk
+    }
+
+    /// Get a mutable reference to the disk in a drive
+    pub fn get_disk_mut(&mut self, drive: usize) -> Option<&mut DiskImage> {
+        if drive > 3 {
+            return None;
+        }
+        self.drives[drive].as_mut()
+    }
+
+    /// Get a reference to the disk in a drive
+    pub fn get_disk(&self, drive: usize) -> Option<&DiskImage> {
+        if drive > 3 {
+            return None;
+        }
+        self.drives[drive].as_ref()
     }
 
     /// Get the base I/O port address
@@ -313,12 +190,11 @@ impl TarbellController {
             2 => self.sector_register,
             3 => {
                 // Data register: if we're in a read operation, return next byte
-                if self.reading && self.buffer_position < BYTES_PER_SECTOR {
+                if self.reading && self.buffer_position < SECTOR_SIZE {
                     let value = self.sector_buffer[self.buffer_position];
                     self.buffer_position += 1;
 
-                    if self.buffer_position >= BYTES_PER_SECTOR {
-                        // Sector read complete
+                    if self.buffer_position >= SECTOR_SIZE {
                         self.reading = false;
                         self.status &= !STATUS_BUSY;
                     }
@@ -349,13 +225,11 @@ impl TarbellController {
             }
             3 => {
                 // Data register
-                if self.writing && self.buffer_position < BYTES_PER_SECTOR {
-                    // Writing sector data byte by byte
+                if self.writing && self.buffer_position < SECTOR_SIZE {
                     self.sector_buffer[self.buffer_position] = value;
                     self.buffer_position += 1;
 
-                    if self.buffer_position >= BYTES_PER_SECTOR {
-                        // Sector write complete
+                    if self.buffer_position >= SECTOR_SIZE {
                         self.finish_write_sector();
                     }
                 } else {
@@ -372,8 +246,7 @@ impl TarbellController {
         match &self.drives[drive] {
             Some(_disk) => {
                 self.status &= !STATUS_NOT_READY;
-                // Write-protected status
-                if self.drives[drive].as_ref().is_some_and(|d| d.write_protected) {
+                if self.drives[drive].as_ref().is_some_and(|d| d.is_write_protected()) {
                     self.status |= STATUS_WRITE_PROTECT;
                 } else {
                     self.status &= !STATUS_WRITE_PROTECT;
@@ -385,33 +258,19 @@ impl TarbellController {
         }
     }
 
-    /// Get a mutable reference to the current drive's disk
-    fn current_disk(&mut self) -> Option<&mut FloppyDisk> {
-        self.drives[self.current_drive as usize].as_mut()
-    }
-
-    /// Get an immutable reference to the current drive's disk
-    fn current_disk_ref(&self) -> Option<&FloppyDisk> {
-        self.drives[self.current_drive as usize].as_ref()
-    }
-
     /// Execute an FD1771 command
     fn execute_command(&mut self, command: u8) {
         let cmd_type = command & CMD_TYPE_MASK;
 
         match cmd_type {
             CMD_RESTORE => {
-                // Restore (seek to track 0)
                 self.track_register = 0;
-                self.status |= STATUS_BUSY;
-                // Immediately complete (emulated hardware is instant)
                 self.status &= !STATUS_BUSY;
                 self.error = false;
             }
             CMD_SEEK => {
-                // Seek to track in data register
                 let target_track = self.data_register;
-                if target_track < TRACKS_PER_DISK {
+                if target_track < 77 {
                     self.track_register = target_track;
                     self.status &= !STATUS_BUSY;
                     self.error = false;
@@ -421,15 +280,13 @@ impl TarbellController {
                 }
             }
             CMD_STEP | CMD_STEP_IN | CMD_STEP_OUT => {
-                // Step in/out one track
                 if cmd_type == CMD_STEP_IN {
-                    if self.track_register < TRACKS_PER_DISK - 1 {
+                    if self.track_register < 76 {
                         self.track_register += 1;
                     }
                 } else if cmd_type == CMD_STEP_OUT && self.track_register > 0 {
                     self.track_register -= 1;
                 }
-                // Step (with update flag) just re-steps
                 self.status &= !STATUS_BUSY;
             }
             CMD_READ_SECTOR => {
@@ -439,24 +296,18 @@ impl TarbellController {
                 self.begin_write_sector();
             }
             CMD_READ_ADDRESS => {
-                // Read address mark: returns track number in data register
                 self.data_register = self.track_register;
                 self.status &= !STATUS_BUSY;
             }
             CMD_READ_TRACK | CMD_WRITE_TRACK => {
-                // Full track read/write not needed for CP/M operation
-                // Mark complete immediately
                 self.status &= !STATUS_BUSY;
             }
             CMD_FORCE_INTERRUPT => {
-                // Cancel any ongoing operation
                 self.reading = false;
                 self.writing = false;
                 self.status &= !STATUS_BUSY;
             }
-            _ => {
-                // Unknown command, ignore
-            }
+            _ => {}
         }
     }
 
@@ -487,14 +338,13 @@ impl TarbellController {
         }
     }
 
-    /// Begin a write sector operation: prepare the buffer
+    /// Begin a write sector operation
     fn begin_write_sector(&mut self) {
         self.status |= STATUS_BUSY;
-        self.sector_buffer = [0; BYTES_PER_SECTOR];
+        self.sector_buffer = [0; SECTOR_SIZE];
         self.buffer_position = 0;
         self.writing = true;
 
-        // Check if drive is present and writable
         if self.current_disk_ref().is_none() {
             self.error = true;
             self.writing = false;
@@ -504,7 +354,7 @@ impl TarbellController {
 
         if self
             .current_disk_ref()
-            .is_some_and(|d| d.write_protected)
+            .is_some_and(|d| d.is_write_protected())
         {
             self.status |= STATUS_WRITE_PROTECT;
             self.error = true;
@@ -521,7 +371,7 @@ impl TarbellController {
         let sector = self.sector_register;
         let data = self.sector_buffer;
 
-        match self.current_disk() {
+        match self.current_disk_mut() {
             Some(disk) => {
                 if let Err(e) = disk.write_sector(track, sector, &data) {
                     eprintln!("Tarbell write error: {}", e);
@@ -538,61 +388,63 @@ impl TarbellController {
     }
 
     /// Read a sector using CP/M logical sector addressing
-    /// This is the primary interface for CP/M BIOS calls
     pub fn read_logical_sector(
         &mut self,
         drive: u8,
         track: u8,
         logical_sector: u8,
-    ) -> Result<[u8; BYTES_PER_SECTOR], String> {
+    ) -> Result<[u8; SECTOR_SIZE], String> {
         if drive > 3 || self.drives[drive as usize].is_none() {
             return Err(format!("Drive {} not ready", drive));
         }
-        self.current_drive = drive;
-        self.track_register = track;
-        let physical = logical_to_physical(logical_sector);
-        self.sector_register = physical;
-
-        let result = self.drives[drive as usize]
+        let physical = crate::disk::logical_to_physical(logical_sector);
+        self.drives[drive as usize]
             .as_ref()
             .unwrap()
-            .read_logical_sector(track, logical_sector)?;
-
-        Ok(result)
+            .read_sector(track, physical)
     }
 
     /// Write a sector using CP/M logical sector addressing
-    /// This is the primary interface for CP/M BIOS calls
     pub fn write_logical_sector(
         &mut self,
         drive: u8,
         track: u8,
         logical_sector: u8,
-        data: &[u8; BYTES_PER_SECTOR],
+        data: &[u8; SECTOR_SIZE],
     ) -> Result<(), String> {
         if drive > 3 || self.drives[drive as usize].is_none() {
             return Err(format!("Drive {} not ready", drive));
         }
-
+        let physical = crate::disk::logical_to_physical(logical_sector);
         self.drives[drive as usize]
             .as_mut()
             .unwrap()
-            .write_logical_sector(track, logical_sector, data)
+            .write_sector(track, physical, data)
+    }
+
+    /// Get a reference to the current drive's disk
+    fn current_disk_ref(&self) -> Option<&DiskImage> {
+        self.drives[self.current_drive as usize].as_ref()
+    }
+
+    /// Get a mutable reference to the current drive's disk
+    fn current_disk_mut(&mut self) -> Option<&mut DiskImage> {
+        self.drives[self.current_drive as usize].as_mut()
     }
 
     /// Get the number of tracks per disk
     pub fn tracks_per_disk(&self) -> u8 {
-        TRACKS_PER_DISK
+        77
     }
 
     /// Get the number of sectors per track
     pub fn sectors_per_track(&self) -> u8 {
-        SECTORS_PER_TRACK
+        26
     }
 
     /// Get the number of bytes per sector
     pub fn bytes_per_sector(&self) -> usize {
-        BYTES_PER_SECTOR
+        SECTOR_SIZE
     }
 
     /// Check if a drive has a disk inserted
@@ -616,20 +468,12 @@ mod tests {
     }
 
     #[test]
-    fn test_blank_disk_creation() {
-        let disk = FloppyDisk::new_blank();
-        assert_eq!(disk.data.len(), BYTES_PER_DISK);
-        // Blank disks are filled with 0xE5 (CP/M format convention)
-        assert_eq!(disk.data[0], 0xE5);
-    }
-
-    #[test]
     fn test_insert_and_read_blank_disk() {
         let mut controller = TarbellController::new();
         controller.insert_blank_disk(0).unwrap();
         assert!(controller.has_disk(0));
 
-        // Reading from a blank disk should return 0xE5 bytes
+        // Reading from a blank disk should return 0xE5 bytes (CP/M format)
         let sector = controller.read_logical_sector(0, 0, 0).unwrap();
         assert_eq!(sector[0], 0xE5);
     }
@@ -639,41 +483,14 @@ mod tests {
         let mut controller = TarbellController::new();
         controller.insert_blank_disk(0).unwrap();
 
-        let data = [0x42u8; BYTES_PER_SECTOR];
+        let data = [0x42u8; SECTOR_SIZE];
         controller.write_logical_sector(0, 0, 0, &data).unwrap();
 
         let read_back = controller.read_logical_sector(0, 0, 0).unwrap();
         assert_eq!(read_back[0], 0x42);
-        // Only first sector should be written, rest still 0xE5
+        // Other sectors should still be 0xE5
         let other_sector = controller.read_logical_sector(0, 0, 1).unwrap();
         assert_eq!(other_sector[0], 0xE5);
-    }
-
-    #[test]
-    fn test_logical_to_physical_sector_mapping() {
-        // Logical 0 -> Physical 1
-        assert_eq!(logical_to_physical(0), 1);
-        // Logical 1 -> Physical 7
-        assert_eq!(logical_to_physical(1), 7);
-        // Verify round-trip
-        for logical in 0..26u8 {
-            let physical = logical_to_physical(logical);
-            let back = physical_to_logical(physical);
-            assert_eq!(back, logical, "Round-trip failed for logical sector {}", logical);
-        }
-    }
-
-    #[test]
-    fn test_sector_skew_table_coverage() {
-        // Every physical sector 1-26 should appear exactly once
-        let mut seen = [false; 27]; // index 0 unused, 1-26 used
-        for &phys in &SECTOR_SKEW_TABLE {
-            assert!(!seen[phys as usize], "Duplicate physical sector {}", phys);
-            seen[phys as usize] = true;
-        }
-        for i in 1..=26 {
-            assert!(seen[i], "Missing physical sector {}", i);
-        }
     }
 
     #[test]
@@ -711,8 +528,8 @@ mod tests {
         controller.insert_blank_disk(0).unwrap();
         controller.insert_blank_disk(1).unwrap();
 
-        let data_a = [0xAAu8; BYTES_PER_SECTOR];
-        let data_b = [0xBBu8; BYTES_PER_SECTOR];
+        let data_a = [0xAAu8; SECTOR_SIZE];
+        let data_b = [0xBBu8; SECTOR_SIZE];
 
         controller.write_logical_sector(0, 0, 0, &data_a).unwrap();
         controller.write_logical_sector(1, 0, 0, &data_b).unwrap();
@@ -739,5 +556,24 @@ mod tests {
 
         // Drive without disk should fail
         assert!(controller.read_logical_sector(2, 0, 0).is_err());
+    }
+
+    #[test]
+    fn test_eject_disk() {
+        let mut controller = TarbellController::new();
+        controller.insert_blank_disk(0).unwrap();
+        assert!(controller.has_disk(0));
+
+        let disk = controller.eject_disk(0);
+        assert!(disk.is_some());
+        assert!(!controller.has_disk(0));
+    }
+
+    #[test]
+    fn test_insert_disk_image() {
+        let mut controller = TarbellController::new();
+        let disk = DiskImage::new_formatted();
+        controller.insert_disk_image(0, disk).unwrap();
+        assert!(controller.has_disk(0));
     }
 }
