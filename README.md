@@ -1,47 +1,89 @@
 # IMSAI 8080 Emulator
 
-A Rust-based emulator for the IMSAI 8080 microcomputer system, one of the earliest commercially successful personal computers based on the Intel 8080 CPU.
+A Rust emulator for the IMSAI 8080 that boots and runs CP/M 2.2.
 
-## Overview
+## What It Does
 
-This emulator uses the [rust-intel8080-emulator](https://github.com/andrewthecodertx/rust-intel8080-emulator) crate as its CPU core and implements the necessary hardware components to simulate the IMSAI 8080 system.
+ Loads a CP/M 2.2 disk image, installs a custom BIOS, and runs the operating system — complete with console output, disk I/O, and the `A>` prompt.
 
-## Features
+## Hardware Emulated
 
-- Complete Intel 8080 CPU emulation
-- 64KB RAM memory space
-- Modular design for easy extension
-- Written in safe, efficient Rust
+- Intel 8080 CPU ([rust-intel8080-emulator](https://github.com/andrewthecodertx/rust-intel8080-emulator))
+- 64KB RAM
+- Tarbell 1011 floppy disk controller (FD1771, 8" SSSD, ports 0x48–0x4B)
+- IMSAI VIO video board (80×24 character display, ports 0x00–0x01)
+- S-100 bus connecting all components
 
-## Architecture
+## CP/M 2.2 Memory Map
 
-The emulator consists of several modules:
+| Address  | Contents                              |
+|----------|----------------------------------------|
+| 0x0000   | Vectors (JMP WBOOT, JMP BDOS)         |
+| 0x0100   | TPA (Transient Program Area)           |
+| 0xE400   | CCP (from z80pack disk image)          |
+| 0xEC00   | BDOS (from z80pack disk image)         |
+| 0xF000   | BDOS data area                         |
+| 0xFA00   | Custom BIOS (17-entry jump table)     |
+| 0xFB20   | DPH + DIRBUF + CSV + ALV              |
 
-- `emulator`: Main system coordinator
-- `memory`: RAM memory system (64KB)
-- `io`: Input/output controller
-- `system`: System configuration and components
-
-## Building
-
-```bash
-cargo build
-```
-
-## Running
+## Quick Start
 
 ```bash
-cargo run
+cargo build --release
+./target/release/rust-imsai-emulator disk_images/cpm22-z80pack.dsk
 ```
 
-## Dependencies
+This boots CP/M 2.2 and displays the `A>` prompt after ~5M instructions.
 
-- [intel8080](https://github.com/andrewthecodertx/rust-intel8080-emulator) - Intel 8080 CPU emulator
+## Command-Line Options
 
-## Current Status
+```
+rust-imsai-emulator [DISK_IMAGE] [OPTIONS]
 
-This is a work in progress. The basic structure is in place but full emulation of IMSAI hardware is still being developed.
+Options:
+  --trace, -t       Trace every instruction
+  --vtrace, -v      Verbose trace (with I/O logging)
+  --diag, -d        Diagnostic mode (I/O log + region tracking)
+  --step, -s         Step trace (first 500 instructions)
+  --pctrace, -p      PC ring-buffer trace (last 8K instructions)
+  --hybrid           Full-speed run with periodic display flush
+```
+
+## Disk Images
+
+Use any 256,256-byte z80pack-format CP/M 2.2 8" SSSD image (77 tracks × 26 sectors × 128 bytes). The `disk_images/` directory contains test images.
+
+## BIOS
+
+The custom BIOS at 0xFA00 provides all 17 CP/M 2.2 entry points:
+
+| # | Entry    | Function                         |
+|---|----------|----------------------------------|
+| 0 | BOOT     | Cold start (outputs debug 0xFE) |
+| 1 | WBOOT    | Warm start (reinitializes, jumps to CCP) |
+| 2 | CONST    | Console status (always ready)     |
+| 3 | CONIN    | Console input (blocking)         |
+| 4 | CONOUT   | Console output (port 0x00)       |
+| 5 | LIST     | List device (no-op)              |
+| 6 | PUNCH    | Punch device (console)            |
+| 7 | READER   | Reader (returns EOF)              |
+| 8 | HOME     | Seek track 0                     |
+| 9 | SELDSK   | Select disk, return DPH pointer   |
+|10 | SETTRK   | Set track number                 |
+|11 | SETSEC   | Set sector number                 |
+|12 | SETDMA   | Set DMA address                  |
+|13 | READ     | Read sector into DMA buffer      |
+|14 | WRITE    | Write sector from DMA buffer     |
+|15 | LISTST   | List status (always ready)       |
+|16 | SECTRAN  | Sector translation with skew     |
+
+## Known Limitations
+
+- No keyboard input (CONIN returns a fixed character; CONST always reports ready)
+- Runs a fixed number of instructions then stops (no interactive mode yet)
+- Only drive A: is functional
+- Write operations to disk are not yet fully integrated
 
 ## License
 
-MIT License - see LICENSE file for details.
+MIT — see [LICENSE](LICENSE).
