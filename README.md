@@ -86,4 +86,4 @@ The custom BIOS at 0xFA00 provides all 17 CP/M 2.2 entry points:
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT, see [LICENSE](LICENSE).
