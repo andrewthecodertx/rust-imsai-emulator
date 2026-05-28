@@ -2,97 +2,89 @@
 
 ## Summary
 
-The **Emulator is working**. Console output, disk I/O, and CPU emulation are all functional.
+The **IMSAI 8080 emulator successfully boots CP/M 2.2** and displays the `A>` prompt.
 
-## Proof of Working CPU/Console
+## What Works
 
-Running `./target/release/rust-imsai-emulator --console-test --hybrid` shows:
-- 299 console OUT operations,
-- 'X' character successfully output to console,
-- CPU running at full speed with periodic flush.
+- **CPU emulation**: Full Intel 8080 instruction set
+- **Memory**: 64K address space with bus architecture
+- **Console I/O**: Port 0x00 (data) and 0x01 (status) for terminal output
+- **Tarbell disk controller**: Ports 0x48-0x4B for 8" floppy disk I/O
+- **CP/M 2.2 boot**: Loads z80pack CP/M 2.2 system tracks, installs custom BIOS
+- **BIOS**: Complete 17-entry CP/M 2.2 BIOS with:
+  - Console input/output (CONIN, CONOUT, CONST)
+  - Disk I/O (HOME, SELDSK, SETTRK, SETSEC, SETDMA, READ, WRITE)
+  - Sector translation with 6:1 interleave skew table
+  - Disk Parameter Header (DPH) with proper layout for BDOS compatibility
+- **BDOS integration**: CP/M BDOS successfully reads the directory, writes to console
 
-## The Problem: CP/M Disk Image
+## Architecture
 
-The `cpm22-boot.img` and `hello_cpm.img` images are **not** complete CP/M 2.2 systems:
-
-### `cpm22-boot.img` (CMI5619 image):
-- Contains `CPM.CPM` (9,728 bytes) which is the *relocating boot loader*,
-- Does NOT contain separate CCP/BDOS binaries,
-- Boot loader self-modifies and expects to find CCP on disk after sector 76,
-- This image is used for SYSGEN operations, not direct booting.
-
-### `hello_cpm.img` (our custom image):
-- Boot sector loads to 0x0080 and jumps to CCP at 0xE400,
-- CCP is just 21 bytes that polls console (IN 0x01 / IN 0x00),
-- No BDOS implementation,
-- No utilities (DDT, ED, PIP, etc.).
-
-## Working Solution Paths
-
-### Option 1: Use SIMH CP/M 2.2 Disk Images
-Download verified CP/M 2.2 disk images from SIMH or official sources:
-
-```bash
-# From SIMH official releases
-curl -O https://simh.trailing-edge.com/sources/simhv312-5.zip
-# Extract disk images
+```
+Memory Map (64K):
+  0x0000-0x00FF  Zero page (vectors, BDOS entry at 0x0005)
+  0x0100-0xE3FF  TPA (Transient Program Area)
+  0xE400-0xEAFF  CCP (Command Control Program)
+  0xEB00-0xEBFF   BDOS data
+  0xEC00-0xEFFF   BDOS code
+  0xF000-0xF9FF   BDOS data/buffers
+  0xFA00-0xFB1F   Custom BIOS (jump table + routines)
+  0xFB20-0xFB2F   DPH (Disk Parameter Header)
+  0xFB30-0xFBAF   DIRBUF (directory buffer, 128 bytes)
+  0xFBB0-0xFBCF   CSV (directory check vector, 32 bytes)
+  0xFBD0-0xFBFF   ALV (allocation vector, 48 bytes)
+  0xFC00-0xFFFF   Available
 ```
 
-Or try the SIMH disk image repository:
-- https://github.com/open-simh/simh-disk-images
+## Key Bugs Fixed
 
-### Option 2: Build CP/M from Source
-Download DRI's CP/M 2.2 source and assemble:
+1. **DPH scratch area overlap**: The z80pack BDOS uses 6 bytes of scratch
+   space at DPH offsets 2-7. Our original layout had DIRBUF at offset 6,
+   which the BDOS overwrote, corrupting the directory buffer pointer.
+   Fixed by moving DIRBUF to offset 8.
 
-1. Get CP/M 2.2 source (DRI source code),
-2. Assemble CCP for 0xE400, BDOS for 0xEC00,
-3. Assemble BIOS for 0xFA00 (using our BIOS code),
-4. Create a disk image with proper sectors.
+2. **Skew table / scratch variable overlap**: CUR_TRACK (0xF9E8) overlapped
+   the SECTRAN skew table (0xF9DF-0xF9F8), corrupting sector translation.
+   Fixed by moving scratch variables after the skew table.
 
-### Option 3: Use Pre-built Images
-Some CP/M archives have working images:
-- https://www.cpm.z80.de/
-- https://www.gaby.de/cpm/ (if available)
+3. **Tarbell DRQ handling**: The FD1771 status register now properly signals
+   DRQ (Data Request) when sector data is available, and BUSY during active
+   read/write operations.
 
-## Current Emulator Capabilities
+4. **Sector 0 handling**: The disk image reader now treats sector 0 as
+   sector 1 for compatibility with BDOS implementations that pass logical
+   sector 0 instead of physical sector 1.
 
-Successfully tested:
-- CPU stepping (run_step_trace),
-- Full-speed execution with hybrid test,
-- Console output to video buffer,
-- Disk sector read/write,
-- BIOS jump table installation at 0xFA00.
+5. **SECTRAN instruction fix**: MVI A,0x00 was being emitted where MVI H,0x00
+   was needed. Applied a runtime patch to fix this.
 
-## Commands for Debug/Test
+## Commands for Running
 
 ```bash
-# Console output test (outputs 'X')
-./target/release/rust-imsai-emulator --console-test --hybrid
+# Normal run (shows A> prompt after ~5M instructions):
+./target/release/rust-imsai-emulator disk_images/cpm22-z80pack.dsk
 
-# Boot hello image (CP/M with minimal CCP)
-./target/release/rust-imsai-emulator --hello --hybrid
+# With diagnostics:
+./target/release/rust-imsai-emulator disk_images/cpm22-z80pack.dsk --pctrace
+./target/release/rust-imsai-emulator disk_images/cpm22-z80pack.dsk --diag
+./target/release/rust-imsai-emulator disk_images/cpm22-z80pack.dsk --step
 
-# Full CP/M with boot loader (cpm22-boot.img)
-./target/release/rust-imsai-emulator --pctrace
-
-# Step trace (for detailed debugging)
-./target/release/rust-imsai-emulator --step
+# Different disk images:
+./target/release/rust-imsai-emulator disk_images/cpm22-boot.img
 ```
 
-## Next Steps to Run Real CP/M Software
+## Current Limitations
 
-1. **Find a valid CP/M 2.2 disk image** with proper boot + CCP + BDOS,
-2. Or, **build CP/M binaries** from source and create a proper image,
-3. Place the binary in `disk_images/cpm22-boot.img` (or update code to use a new name),
-4. Test with `--hybrid` or `--pctrace`.
+- No keyboard input yet ( CONST always returns "character ready")
+- No TIM/interactive mode for typing commands
+- The emulator runs a fixed number of instructions and stops
+- Only the first disk drive (A:) is functional
 
 ## Files to Review
 
-- **`disk_images/build_cpm22.py`** - Creates a minimal CP/M 2.2 image,
-- **`disk_images/build_cpm.py`** - Original CMI5619 image builder,
-- **`src/bios.rs`** - BIOS implementation (17-entry jump table),
-- **`src/main.rs`** - Emulator main loop and test modes.
-
-## Conclusion
-
-The emulator is functionally complete. The "not working" aspect is just the disk image supply, not the emulator itself. Once a proper CP/M 2.2 disk image is used, the emulator will boot and run CP/M software.
+- **`src/bios.rs`** - CP/M 2.2 BIOS implementation (jump table + routines)
+- **`src/cpm_bios.rs`** - DRI relocating-image support (for CMI5619 images)
+- **`src/main.rs`** - Emulator main loop and test modes
+- **`src/io/tarbell.rs`** - Tarbell disk controller with FD1771 emulation
+- **`src/disk.rs`** - Disk image management (8" SSSD format)
+- **`src/dpb.rs`** - Disk Parameter Block definitions
