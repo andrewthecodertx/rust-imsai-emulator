@@ -1,57 +1,70 @@
 # Debug Progress Notes
 
-## Status: BIOS Fixed, CP/M boots but no console output yet
+## Status: Root cause identified — loading disk image incorrectly
 
-### ✅ Fixed: Jump table at 0x0000 and 0x0005
-- 0x0000 = JMP 0xFA03 (BIOS WBOOT entry)
-- 0x0005 = JMP 0xEC03 (BDOS function entry)
-- IOBYTE and current drive properly initialized by BIOS
+### What the PC trace reveals
 
-### ✅ Fixed: BIOS jump table at 0xFA00
-- Full 17-entry CP/M 2.2 BIOS with proper routines
-- Console I/O (ports 0x00/0x01), Tarbell disk I/O (0x48-0x4B)
-- DPB and skew table installed at 0xF9D0
+After 5M instructions, the CPU is stuck in an infinite reboot loop through
+empty memory (NOP sled). The trace shows:
 
-### ✅ Fixed: WBOOT initializes A=0 and zero page before jumping to CCP
+1. WBOOT (0xFA03): initializes, JMPs to CCP at 0xE400 ✓
+2. CCP (0xE400): DCR A (0→0xFF), JNZ 0xE500 (cold start) ✓
+3. Cold start (0xE500): INX DE, INX HL, JMP 0xE5F8 ✓
+4. 0xE5F8: NOP sled (~1K zeros in CCP BSS area)
+5. 0xEA00: `JM 0xFD00` — conditional jump taken because sign flag is set
+6. 0xFD00: More NOPs (uninitialized RAM) → wraps to 0x0000 → WBOOT → loop
 
-### Current Issue: CPU executes CCP/BDOS code but produces no I/O
+### Root cause
 
-Observations from step trace:
-1. CPU boots correctly: 0x0000 → WBOOT → LXI SP → JMP CCP (0xE400)
-2. CCP starts executing: DCR A (A=0→0xFF), JNZ 0xE500 (cold start)
-3. Cold start code at 0xE500 runs, then jumps through CCP initialization
-4. CCP has substantial BSS (zero-filled) sections — the CPU slides through
-   ~1K of NOPs before reaching more CCP code
-5. After 50K instructions, CPU is still in CCP/BDOS area (~0xE600-0xEB00)
-6. ZERO I/O instructions executed — no IN/OUT at all in 50K steps
+**We are loading the raw disk image as a CPM.CPM relocating file, but the
+image contains mixed CCP + CMI5619 BIOS data on the system tracks.**
 
-### Root cause analysis (still investigating):
+The `CpmBios::load_and_relocate()` function copies `buf[0x100..0x900]` as "CCP"
+and `buf[0x900..]` as "BDOS", applying per-segment relocation biases. But:
 
-The CCP initialization should call BDOS function 13 (disk reset) and then
-function 14 (select drive) to read the directory. This requires the BIOS
-READ function to work with the Tarbell controller. Two possibilities:
+- The raw disk image has CCP code at offsets 0x100-0x2A0 (sectors 3-6)
+- Then CMI5619 BIOS code at 0x700-0x7FF (sectors 15-16) which is NOT CCP
+- Then BDOS at 0x900+ (sector 19 onward)
 
-1. **BDOS calls are not reaching our BIOS** — the relocated BDOS may have
-   internal call chains that don't properly chain to the BIOS at 0xFA00.
-   Need to verify that CALL 5 properly reaches BDOS function dispatcher,
-   which then calls BIOS via the jump table at 0xFA00.
+When we relocate 0x100-0x900 as "CCP with ORG 0x0100 and BIAS 0xE300", we
+incorrectly relocate the CMI5619 BIOS code that happens to be in that range.
+The bytes `FA 00 1A` at offset 0x700 (which is CMI5619 code `JM 0x1A00`)
+get relocated to `JM 0xFD00`, sending the CPU into uninitialized memory.
 
-2. **BIOS READ is failing** — the Tarbell controller may not respond
-   properly to the READ command sequence (issue RESTORE, then READ with
-   status polling). The HOME/SELDSK/SETTRK/SETSEC/READ sequence may
-   have a bug.
+### The fix (two options)
 
-3. **Sector skew mismatch** — the BIOS SECTRAN routine uses a skew table
-   to translate logical-to-physical sectors, but the disk image may store
-   data in logical order already. If SECTRAN skews twice, the wrong
-   sectors will be read.
+**Option A: Load system tracks sequentially into CPMB, like the real boot**
+Read sectors 2-78 from the system tracks and write them directly to memory
+starting at CPMB (0xE400), exactly as the CMI5619 boot loader does. Then
+skip the CpmBios relocation entirely — the CPM.CPM system on this disk was
+already configured for a 64K system with the correct base addresses. The
+boot sector's cold start code handles CCP/BDOS setup.
 
-4. **CCP is stuck in a loop** — the CCP may be looping waiting for
-   keyboard input or disk I/O that never completes.
+**Option B: Properly parse the CPM.CPM format**
+Only load and relocate the actual CCP (0x100-0x900) and BDOS (0x900+)
+from the CPM.CPM data, but skip any non-CCP/BDOS data in between. This
+requires knowing the exact boundaries, which are system-specific.
 
-### Next steps:
-- Add targeted debug logging to BIOS CONOUT and READ routines
-- Verify CALL 5 → BDOS → BIOS chain works
-- Check if BDOS function 13 (disk reset) is called
-- Consider whether SECTRAN should return the sector number unchanged
-  (if the image is already in logical order)
+Option A is simpler and more faithful to how the real hardware works.
+The disk image IS a 64K CMI5619 system — the CCP/BDOS on it are already
+assembled for the correct memory layout. We just need to load the sectors
+to the right addresses and let the existing cold start code handle setup.
+
+### Additional issue: Zero page needs BDOS vector set by cold start
+
+If we go with Option A, the cold start code at the jump target (0x012C
+from the boot sector) will set up the vectors at 0x0000 and 0x0005.
+But our custom BIOS at 0xFA00 needs to be in place before the CCP runs.
+So the sequence would be:
+1. Load system tracks to CPMB
+2. Install our custom BIOS at 0xFA00
+3. Set up initial WBOOT vector at 0x0000 (so we can reboot)
+4. Run the cold start code which sets up BDOS vector at 0x0005
+5. CCP starts and uses our BIOS
+
+### Still to verify
+
+- Is the CPM.CPM on this disk actually already relocated for 64K?
+  (If so, no relocation is needed at all — just copy to memory.)
+- Does the cold start code use ports compatible with our emulator?
+  (If it uses CMI5619 ports, we need to intercept or replace it.)
