@@ -1,51 +1,57 @@
 # Debug Progress Notes
 
-## Status: Partial Fix Applied
-
-The three key issues from the original debug.md have been addressed:
+## Status: BIOS Fixed, CP/M boots but no console output yet
 
 ### ✅ Fixed: Jump table at 0x0000 and 0x0005
-- 0x0000 now correctly points to JMP 0xFA03 (BIOS WBOOT entry, jump table entry 1)
-- 0x0005 now correctly points to JMP 0xEC03 (BDOS function entry, BDOS+3)
-- IOBYTE (0x0003) = 0x00, Current drive (0x0004) = 0x00
+- 0x0000 = JMP 0xFA03 (BIOS WBOOT entry)
+- 0x0005 = JMP 0xEC03 (BDOS function entry)
+- IOBYTE and current drive properly initialized by BIOS
 
 ### ✅ Fixed: BIOS jump table at 0xFA00
-- Full 17-entry CP/M 2.2 BIOS jump table installed at 0xFA00
-- Each entry is a JMP to the corresponding routine implementation
-- Routines include proper CONST, CONIN, CONOUT, SELDSK, SETTRK, SETSEC, SETDMA, READ, WRITE, SECTRAN
-- Console I/O uses ports 0x00/0x01
-- Disk I/O uses Tarbell controller ports 0x48-0x4B
-- DPB and skew table installed at 0xF9D0/0xF9DF
-- Scratch RAM variables at 0xF9E8-0xF9EC
+- Full 17-entry CP/M 2.2 BIOS with proper routines
+- Console I/O (ports 0x00/0x01), Tarbell disk I/O (0x48-0x4B)
+- DPB and skew table installed at 0xF9D0
 
-### ✅ Fixed: WBOOT now initializes zero page
-- A=0 (warm boot indicator)
-- SP=0x0000
-- IOBYTE=0, current drive=0
-- Then jumps to CCP at 0xE400
+### ✅ Fixed: WBOOT initializes A=0 and zero page before jumping to CCP
 
-## Remaining Issue: No Console Output
+### Current Issue: CPU executes CCP/BDOS code but produces no I/O
 
-After boot, the CPU executes CCP/BDOS code but produces no I/O operations.
+Observations from step trace:
+1. CPU boots correctly: 0x0000 → WBOOT → LXI SP → JMP CCP (0xE400)
+2. CCP starts executing: DCR A (A=0→0xFF), JNZ 0xE500 (cold start)
+3. Cold start code at 0xE500 runs, then jumps through CCP initialization
+4. CCP has substantial BSS (zero-filled) sections — the CPU slides through
+   ~1K of NOPs before reaching more CCP code
+5. After 50K instructions, CPU is still in CCP/BDOS area (~0xE600-0xEB00)
+6. ZERO I/O instructions executed — no IN/OUT at all in 50K steps
 
-### Observed behavior:
-- CPU starts at 0x0000 → JMP 0xFA03 (BIOS WBOOT) → sets A=0, SP=0 → JMP 0xE400 (CCP)
-- CCP begins executing at 0xE400 (first byte is 0x3D = DCR A)
-- After 200K instructions, CPU is at ~0xE748 (in BDOS/CCP area)
-- No OUT 0x00 instructions executed (no console output)
+### Root cause analysis (still investigating):
 
-### Possible causes:
-1. **BDOS relocation may be incorrect** - The `CpmBios::load_and_relocate()` relocates addresses by scanning for JMP/CALL opcodes and adding bias. If it incorrectly relocates or misses some addresses, BDOS function calls may go to wrong locations.
+The CCP initialization should call BDOS function 13 (disk reset) and then
+function 14 (select drive) to read the directory. This requires the BIOS
+READ function to work with the Tarbell controller. Two possibilities:
 
-2. **CCP expects different zero-page setup** - The CCP may need more than just IOBYTE and current drive at 0x0003/0x0004. It may depend on the BDOS drive/user code at 0x0004.
+1. **BDOS calls are not reaching our BIOS** — the relocated BDOS may have
+   internal call chains that don't properly chain to the BIOS at 0xFA00.
+   Need to verify that CALL 5 properly reaches BDOS function dispatcher,
+   which then calls BIOS via the jump table at 0xFA00.
 
-3. **Disk I/O not completing** - The BDOS calls BIOS READ to access the directory, but our READ routine may not properly interface with the Tarbell controller. If the first BDOS call (to read the directory) fails, the CCP may hang silently.
+2. **BIOS READ is failing** — the Tarbell controller may not respond
+   properly to the READ command sequence (issue RESTORE, then READ with
+   status polling). The HOME/SELDSK/SETTRK/SETSEC/READ sequence may
+   have a bug.
 
-4. **CCP cold start code** - With A=0 (warm boot), the CCP skips initialization and goes straight to reading the directory. If the directory read fails, it may loop silently.
+3. **Sector skew mismatch** — the BIOS SECTRAN routine uses a skew table
+   to translate logical-to-physical sectors, but the disk image may store
+   data in logical order already. If SECTRAN skews twice, the wrong
+   sectors will be read.
+
+4. **CCP is stuck in a loop** — the CCP may be looping waiting for
+   keyboard input or disk I/O that never completes.
 
 ### Next steps:
-- Run a step trace to see the first few hundred instructions and trace where execution goes
-- Verify BDOS relocation is correct by checking specific addresses
-- Check if BDOS CALL 5 dispatches correctly (does CALL 5 reach the BDOS function dispatcher?)
-- Verify that the Tarbell controller properly responds to READ commands
-- Consider adding more diagnostic output to the BIOS routines (e.g., marking when READ is called)
+- Add targeted debug logging to BIOS CONOUT and READ routines
+- Verify CALL 5 → BDOS → BIOS chain works
+- Check if BDOS function 13 (disk reset) is called
+- Consider whether SECTRAN should return the sector number unchanged
+  (if the image is already in logical order)
