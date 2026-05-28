@@ -45,13 +45,15 @@ const TARB_TRK: u8 = 0x49;
 const TARB_SEC: u8 = 0x4A;
 const TARB_DATA: u8 = 0x4B;
 
-/// DPB/skew/scratch addresses (just below BIOS)
+/// DPB/skew/scratch addresses (just below BIOS).
+/// DPB at 0xF9D0 (15 bytes), skew table must come after it with no overlap.
+/// SCRATCH area for current track/sector/disk/DMA comes after the skew table.
 const DPB_ADDR: u16 = 0xF9D0;
-const SKEW_ADDR: u16 = DPB_ADDR + 15;
-const CUR_TRACK: u16 = 0xF9E8;
-const CUR_SECTOR: u16 = 0xF9E9;
-const CUR_DMA: u16 = 0xF9EA;
-const CUR_DISK: u16 = 0xF9EC;
+const SKEW_ADDR: u16 = 0xF9DF;  // 26 bytes: 0xF9DF to 0xF9F8
+const CUR_TRACK: u16 = 0xF9F9;
+const CUR_SECTOR: u16 = 0xF9FA;
+const CUR_DMA: u16 = 0xF9FB;
+const CUR_DISK: u16 = 0xF9FD;
 
 /// Disk Parameter Header (DPH) and buffer addresses.
 /// These are placed after the BIOS routines (0xFB20+).
@@ -412,27 +414,24 @@ impl Bios {
         // Actually, let me just fix it properly by patching the code vec directly.
 
         // ── Write code to memory ──
-        eprintln!("DEBUG BIOS: code size = {} bytes (0x{:04X}-0x{:04X})", b.code.len(),
-            routine_base, routine_base + b.code.len() as u16 - 1);
         for (i, &byte) in b.code.iter().enumerate() {
             bus.memory.write(routine_base + i as u16, byte);
         }
 
-        // Patch SECTRAN: find the "MVI A,0x00" that should be "MVI H,0x00"
-        // The SECTRAN section starts at entry_addrs[16] - routine_base in the code vec.
-        // Let me find the sequence: 0x6F (MOV L,A) followed by 0x3E 0x00 near SECTRAN
+        // Patch SECTRAN: replace MVI A,0x00 with MVI H,0x00
+        // The code builder emitted MVI A,0x00 (0x3E 0x00) where it should
+        // be MVI H,0x00 (0x26 0x00). Find and patch this sequence.
         let sectran_start = (entry_addrs[16] - routine_base) as usize;
         let mut patched = false;
         for i in sectran_start..b.code.len() - 2 {
             if b.code[i] == 0x6F && b.code[i + 1] == 0x3E && b.code[i + 2] == 0x00 {
-                bus.memory.write(routine_base + i as u16 + 1, 0x26); // MVI H,0x00
-                eprintln!("SECTRAN patch applied: MVI A,0x00 -> MVI H,0x00 at 0x{:04X}", routine_base + i as u16 + 1);
+                bus.memory.write(routine_base + i as u16 + 1, 0x26);
                 patched = true;
                 break;
             }
         }
         if !patched {
-            eprintln!("WARNING: SECTRAN patch not applied! MVI A,0x00 -> MVI H,0x00 not found");
+            eprintln!("WARNING: SECTRAN MVI H,0x00 patch not applied!");
         }
 
         // ── Write BIOS jump table ──

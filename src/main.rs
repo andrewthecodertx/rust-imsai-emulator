@@ -226,21 +226,11 @@ fn boot_cpm(emu: &mut rust_imsai_emulator::Imsai8080) {
     }
 
     let bytes_loaded = mem_addr - CPMB;
-    println!("Loaded {} sectors ({} bytes) at 0x{:04X}-0x{:04X}",
-        sectors_loaded, bytes_loaded, CPMB, CPMB + bytes_loaded - 1);
-
-    // Print CCP header for verification
-    println!("CCP header at 0x{:04X}: {:02X} {:02X} {:02X} {:02X}",
-        CPMB, emu.bus.memory.read(CPMB), emu.bus.memory.read(CPMB+1),
-        emu.bus.memory.read(CPMB+2), emu.bus.memory.read(CPMB+3));
+    println!("Loaded {} sectors ({} bytes) into 0x{:04X}-0x{:04X}",
+        sectors_loaded, bytes_loaded, CPMB, CPMB + bytes_loaded);
 
     // Install our custom BIOS at 0xFA00.
     rust_imsai_emulator::Bios::install_jump_table(&mut emu.bus);
-
-    // Verify vectors
-    println!("Vectors: 0x0000={:02X}{:02X}{:02X} 0x0005={:02X}{:02X}{:02X}",
-        emu.bus.memory.read(0), emu.bus.memory.read(1), emu.bus.memory.read(2),
-        emu.bus.memory.read(5), emu.bus.memory.read(6), emu.bus.memory.read(7));
 
     // Start at CCP — the CCP cold-start entry at 0xE400.
     // CCP will initialize itself, set up 0x0000/0x0005, call BIOS BOOT,
