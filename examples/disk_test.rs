@@ -4,7 +4,7 @@
 //! and CP/M BIOS installation.
 
 use rust_imsai_emulator::{
-    CpmBios, DiskImage, Imsai8080, TarbellController,
+    Bios, DiskImage, Imsai8080, TarbellController,
 };
 use std::path::Path;
 
@@ -12,10 +12,10 @@ fn main() {
     println!("IMSAI 8080 Emulator - Disk & CP/M BIOS Test");
     println!("=============================================\n");
 
-    // Create an emulator instance and install CP/M 2.2 BIOS
+    // Create an emulator instance and install BIOS jump table
     let mut emu = Imsai8080::new();
-    CpmBios::install(&mut emu.bus);
-    println!("CP/M 2.2 BIOS installed at 0x{:04X}", 0x1600);
+    Bios::install_jump_table(&mut emu.bus);
+    println!("BIOS jump table installed at 0x0010");
 
     // Create a formatted disk image and insert it into drive A
     let mut controller = TarbellController::new();

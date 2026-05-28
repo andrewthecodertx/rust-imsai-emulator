@@ -15,8 +15,14 @@
 
 use crate::bus::{ImsaiBus, PORT_CONSOLE_DATA, PORT_CONSOLE_STATUS};
 
+/// Tarbell controller I/O ports
+const TARBELL_CMD_STATUS: u8 = 0x48;
+const TARBELL_TRACK: u8 = 0x49;
+const TARBELL_SECTOR: u8 = 0x4A;
+const TARBELL_DATA: u8 = 0x4B;
+
 /// BIOS entry points in the CP/M jump table
-const NUM_BIOS_ENTRIES: usize = 6;
+const NUM_BIOS_ENTRIES: usize = 17;
 
 /// BIOS implementation for CP/M
 pub struct Bios;
@@ -34,10 +40,11 @@ impl Bios {
     ///   IN/OUT instruction for the corresponding I/O port
     ///   RET
     pub fn install_jump_table(bus: &mut ImsaiBus) {
-        // Warm boot: JMP 0x0000 (restart)
+        // Warm boot: WBOOT does nothing and jumps to CCP (0xE400)
+        const CCP_ADDR: u16 = 0xE400;
         bus.memory.write(0x0000, 0xC3); // JMP
-        bus.memory.write(0x0001, 0x00);
-        bus.memory.write(0x0002, 0x00);
+        bus.memory.write(0x0001, CCP_ADDR as u8);
+        bus.memory.write(0x0002, (CCP_ADDR >> 8) as u8);
 
         // IOBYTE at 0x0003 (console only)
         bus.memory.write(0x0003, 0x00);
@@ -101,7 +108,11 @@ impl Bios {
                     bus.memory.write(routine_addr + 1, 0xFF);
                     bus.memory.write(routine_addr + 2, 0xC9); // RET
                 }
-                _ => {}
+                _ => {
+                    // Stub routines for entries 6-16 (SELDSK, SETTRK, etc.)
+                    // For disk operations, return failure (CPI 0x01, RET) to indicate no disk
+                    bus.memory.write(routine_addr, 0xC9); // RET only (simple stub)
+                }
             }
         }
     }
@@ -117,20 +128,23 @@ mod tests {
         let mut bus = ImsaiBus::new();
         Bios::install_jump_table(&mut bus);
 
-        // Warm boot vector at 0x0000: JMP 0x0000
+        // Warm boot vector at 0x0000: JMP CCP_ADDR (0xE400)
         assert_eq!(bus.memory.read(0x0000), 0xC3);
         assert_eq!(bus.memory.read(0x0001), 0x00);
-        assert_eq!(bus.memory.read(0x0002), 0x00);
+        assert_eq!(bus.memory.read(0x0002), 0xE4);
 
-        // BDOS entry at 0x0005: JMP 0x0000
+        // BDOS entry at 0x0005: JMP 0x0000 (placeholder until system loaded)
         assert_eq!(bus.memory.read(0x0005), 0xC3);
 
-        // BIOS entry 0 (CONST): JMP 0x0100
+        // IOBYTE at 0x0003
+        assert_eq!(bus.memory.read(0x0003), 0x00);
+
+        // BIOS entry 0 (BOOT): JMP 0x0100
         assert_eq!(bus.memory.read(0x0010), 0xC3);
         assert_eq!(bus.memory.read(0x0011), 0x00);
         assert_eq!(bus.memory.read(0x0012), 0x01);
 
-        // CONST routine: IN 0x01
+        // BOOT routine: IN console status (CONST stub since all 17 entries start at BOOT)
         assert_eq!(bus.memory.read(0x0100), 0xDB);
         assert_eq!(bus.memory.read(0x0101), PORT_CONSOLE_STATUS);
     }

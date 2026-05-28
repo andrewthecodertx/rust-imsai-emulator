@@ -240,6 +240,20 @@ impl TarbellController {
         }
     }
 
+    /// Return the CMI5619 WAIT/DRQ port value.
+    /// Bit 7 set = DRQ active (data byte ready to read/write).
+    /// Bit 7 clear = transfer complete.
+    /// The CMI5619 boot code does: IN WAIT; ORA A; JP CHECK (done if positive).
+    pub fn wait_port_value(&self) -> u8 {
+        if self.reading && self.buffer_position < SECTOR_SIZE {
+            0x80 // DRQ active, data available
+        } else if self.writing && self.buffer_position < SECTOR_SIZE {
+            0x80 // DRQ active, ready for data
+        } else {
+            0x00 // Transfer complete
+        }
+    }
+
     /// Update the status register based on current drive state
     fn update_status(&mut self) {
         let drive = self.current_drive as usize;
