@@ -4,7 +4,7 @@ A Rust emulator for the IMSAI 8080 that boots and runs CP/M 2.2.
 
 ## What It Does
 
- Loads a CP/M 2.2 disk image, installs a custom BIOS, and runs the operating system — complete with console output, disk I/O, and the `A>` prompt.
+ Loads a CP/M 2.2 disk image, installs a custom BIOS, and runs the operating system ,  complete with console output, disk I/O, and the `A>` prompt.
 
 ## Hardware Emulated
 
@@ -87,3 +87,7 @@ The custom BIOS at 0xFA00 provides all 17 CP/M 2.2 entry points:
 ## License
 
 MIT, see [LICENSE](LICENSE).
+
+## Contributing
+
+PRs welcome. Please open an issue first for major changes.
