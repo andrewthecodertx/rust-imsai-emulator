@@ -422,11 +422,17 @@ impl Bios {
         // The SECTRAN section starts at entry_addrs[16] - routine_base in the code vec.
         // Let me find the sequence: 0x6F (MOV L,A) followed by 0x3E 0x00 near SECTRAN
         let sectran_start = (entry_addrs[16] - routine_base) as usize;
+        let mut patched = false;
         for i in sectran_start..b.code.len() - 2 {
             if b.code[i] == 0x6F && b.code[i + 1] == 0x3E && b.code[i + 2] == 0x00 {
                 bus.memory.write(routine_base + i as u16 + 1, 0x26); // MVI H,0x00
+                eprintln!("SECTRAN patch applied: MVI A,0x00 -> MVI H,0x00 at 0x{:04X}", routine_base + i as u16 + 1);
+                patched = true;
                 break;
             }
+        }
+        if !patched {
+            eprintln!("WARNING: SECTRAN patch not applied! MVI A,0x00 -> MVI H,0x00 not found");
         }
 
         // ── Write BIOS jump table ──

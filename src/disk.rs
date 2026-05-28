@@ -136,16 +136,20 @@ impl DiskImage {
     /// Read a physical sector from the disk
     ///
     /// Track numbers are 0-76, sector numbers are 1-26 (physical numbering).
+    /// Some CP/M implementations pass sector 0 (logical), so we treat
+    /// sector 0 as sector 1 for compatibility.
     pub fn read_sector(&self, track: u8, sector: u8) -> Result<[u8; SECTOR_SIZE], String> {
         if track >= TOTAL_TRACKS {
             return Err(format!("Track {} out of range (0-{})", track, TOTAL_TRACKS - 1));
         }
-        if sector == 0 || sector > SPT as u8 {
+        // Treat sector 0 as sector 1 (logical-to-physical mapping)
+        let physical_sector = if sector == 0 { 1 } else { sector };
+        if physical_sector > SPT as u8 {
             return Err(format!("Sector {} out of range (1-{})", sector, SPT));
         }
 
         let offset =
-            (track as usize * SPT as usize + (sector - 1) as usize) * SECTOR_SIZE;
+            (track as usize * SPT as usize + (physical_sector - 1) as usize) * SECTOR_SIZE;
         let mut buf = [0u8; SECTOR_SIZE];
         buf.copy_from_slice(&self.data[offset..offset + SECTOR_SIZE]);
         Ok(buf)
@@ -164,12 +168,14 @@ impl DiskImage {
         if track >= TOTAL_TRACKS {
             return Err(format!("Track {} out of range (0-{})", track, TOTAL_TRACKS - 1));
         }
-        if sector == 0 || sector > SPT as u8 {
+        // Treat sector 0 as sector 1 (logical-to-physical mapping)
+        let physical_sector = if sector == 0 { 1 } else { sector };
+        if physical_sector > SPT as u8 {
             return Err(format!("Sector {} out of range (1-{})", sector, SPT));
         }
 
         let offset =
-            (track as usize * SPT as usize + (sector - 1) as usize) * SECTOR_SIZE;
+            (track as usize * SPT as usize + (physical_sector - 1) as usize) * SECTOR_SIZE;
         self.data[offset..offset + SECTOR_SIZE].copy_from_slice(data);
         self.dirty = true;
         Ok(())
