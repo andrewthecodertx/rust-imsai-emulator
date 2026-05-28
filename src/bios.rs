@@ -5,6 +5,7 @@
 //! - 17-entry BIOS jump table at 0xFA00
 //! - Full BIOS routines using Tarbell controller ports 0x48-0x4B
 //!   and console ports 0x00-0x01
+//! - Disk Parameter Header (DPH) with all required buffer pointers
 //!
 //! Memory layout after install:
 //!
@@ -13,9 +14,10 @@
 //! | 0x0000    | JMP WBOOT (0xFA03)                          |
 //! | 0x0003    | IOBYTE                                       |
 //! | 0x0004    | Current drive                                |
-//! | 0x0005    | JMP BDOS (0xEC03)                            |
+//! | 0x0005    | JMP BDOS (0xEC06)                            |
 //! | 0xFA00    | BIOS jump table (17 × 3-byte JMP entries)   |
 //! | 0xFA33+   | BIOS routines                                |
+//! | 0xFB20+   | DPH, DIRBUF, CSV, ALV, DPB, skew table      |
 
 use crate::bus::ImsaiBus;
 
@@ -25,8 +27,10 @@ const BIOS_BASE: u16 = 0xFA00;
 /// Number of CP/M 2.2 BIOS entries
 const NUM_ENTRIES: usize = 17;
 
-/// BDOS entry point for CALL 5 (BDOS+3 = function dispatcher)
-const BDOS_ENTRY: u16 = 0xEC03;
+/// BDOS entry point for CALL 5 (BDOS+6 = function dispatcher)
+/// In the z80pack 64K CP/M 2.2 image, BDOS starts at 0xEC00 and the
+/// function entry is at 0xEC06 (3-byte JMP at 0xEC00 + offset).
+const BDOS_ENTRY: u16 = 0xEC06;
 
 /// CCP base address for 64K system
 const CCP_ADDR: u16 = 0xE400;
@@ -48,6 +52,26 @@ const CUR_TRACK: u16 = 0xF9E8;
 const CUR_SECTOR: u16 = 0xF9E9;
 const CUR_DMA: u16 = 0xF9EA;
 const CUR_DISK: u16 = 0xF9EC;
+
+/// Disk Parameter Header (DPH) and buffer addresses.
+/// These are placed after the BIOS routines (0xFB20+).
+/// The DPH is a 16-byte structure that SELDSK returns to BDOS.
+/// The BDOS uses offsets 2-7 as scratch workspace (three 16-bit words),
+/// so DIRBUF must be at offset 8, not offset 6.
+///
+/// DPH layout:
+/// offset 0-1:  XLT (sector translation table address)
+/// offset 2-3:  Scratch 1 (BDOS working storage)
+/// offset 4-5:  Scratch 2 (BDOS working storage)
+/// offset 6-7:  Scratch 3 (BDOS working storage)
+/// offset 8-9:  DIRBUF (directory buffer address)
+/// offset 10-11: DPB (disk parameter block address)
+/// offset 12-13: CSV (directory check vector address)
+/// offset 14-15: ALV (allocation vector address)
+const DPH_ADDR: u16 = 0xFB20;
+const DIRBUF_ADDR: u16 = 0xFB30; // 128 bytes for directory buffer
+const CSV_ADDR: u16 = 0xFBB0;    // 32 bytes for directory check vector
+const ALV_ADDR: u16 = 0xFBD0;    // 48 bytes for allocation vector
 
 /// Simple code builder that tracks the current absolute address.
 struct CodeBuilder {
@@ -150,28 +174,34 @@ impl Bios {
         // ── Build BIOS routines ──
         let routine_base = BIOS_BASE + (NUM_ENTRIES as u16) * 3;
         let mut b = CodeBuilder::new(routine_base);
+        eprintln!("DEBUG: BIOS routine_base = 0x{:04X}, jump table size = {} bytes", routine_base, (NUM_ENTRIES as u16) * 3);
         let mut entry_addrs: [u16; NUM_ENTRIES] = [0; NUM_ENTRIES];
 
         // Entry 0: BOOT — debug marker, fall through to WBOOT
         entry_addrs[0] = b.here();
         b.emit_out(0xFE);
 
-        // Entry 1: WBOOT — set A=0 (warm boot), reset SP, initialize zero page, jump to CCP
-        // CP/M expects A=0 for warm boot (A≠0 means cold boot)
+        // Entry 1: WBOOT — set up zero page, install BDOS vector, jump to CCP
+        // On warm boot, BDOS expects JMP at 0x0005 to BDOS entry.
+        // We set A=0 (cold boot flag) and C=current drive, then JMP CCP.
         entry_addrs[1] = b.here();
-        b.emit_mvi_a(0x00); // A = 0 (warm boot indicator)
         b.emit_lxi_sp(0x0000);
-        // Initialize key zero-page locations
-        // 0x0003: IOBYTE = 0 (console)
-        b.emit_mvi_a(0x00); // actually, MVI destroys A... we need A=0 still
-        // STA 0x0003 is safe since A is already 0
-        // But we need to use LXI H + SHLD for 16-bit stores
-        // Actually: A=0, and we need to store to 0x0003 and 0x0004
-        // Simplest: STA 0x0003; STA 0x0004
-        b.emit(0x32); b.emit_u16(0x0003); // STA 0x0003 (IOBYTE = 0)
-        b.emit(0x32); b.emit_u16(0x0004); // STA 0x0004 (current drive = 0)
-        // Restore A=0 in case STA affected it (it doesn't on 8080, but be safe)
+        // Set up JMP at 0x0000 → WBOOT
+        b.emit_mvi_a(0xC3); b.emit(0x32); b.emit_u16(0x0000); // STA 0x0000
+        b.emit_lxi_h(BIOS_BASE + 3); // WBOOT entry = jump table entry 1
+        b.emit(0x22); b.emit_u16(0x0001); // SHLD 0x0001
+        // Set up JMP at 0x0005 → BDOS
+        b.emit_mvi_a(0xC3); b.emit(0x32); b.emit_u16(0x0005); // STA 0x0005
+        b.emit_lxi_h(BDOS_ENTRY);
+        b.emit(0x22); b.emit_u16(0x0006); // SHLD 0x0006
+        // IOBYTE = 0 (console), current drive = 0
         b.emit_mvi_a(0x00);
+        b.emit(0x32); b.emit_u16(0x0003); // STA 0x0003
+        b.emit(0x32); b.emit_u16(0x0004); // STA 0x0004
+        // Default DMA address = 0x0080
+        b.emit(0x01); b.emit_u16(0x0080); // LXI B,0x0080
+        // Jump to CCP with A=0, C=drive 0
+        b.emit_mvi_a(0x00); // A=0 means cold start
         b.emit_jmp(CCP_ADDR);
 
         // Entry 2: CONST — check console status
@@ -230,7 +260,7 @@ impl Bios {
         b.emit_sta(CUR_TRACK);
         b.emit_ret();
 
-        // Entry 9: SELDSK — select disk, return HL=DPB or 0
+        // Entry 9: SELDSK — select disk, return HL=DPH or 0
         entry_addrs[9] = b.here();
         b.emit(0x79); // MOV A,C
         b.emit_cpi(0x04);
@@ -239,7 +269,7 @@ impl Bios {
         b.emit_jnc(seldsk_err);
         b.emit(0x79); // MOV A,C
         b.emit_sta(CUR_DISK);
-        b.emit_lxi_h(DPB_ADDR);
+        b.emit_lxi_h(DPH_ADDR);
         b.emit_ret();
         // seldsk_err:
         debug_assert_eq!(b.here(), seldsk_err);
@@ -382,6 +412,8 @@ impl Bios {
         // Actually, let me just fix it properly by patching the code vec directly.
 
         // ── Write code to memory ──
+        eprintln!("DEBUG BIOS: code size = {} bytes (0x{:04X}-0x{:04X})", b.code.len(),
+            routine_base, routine_base + b.code.len() as u16 - 1);
         for (i, &byte) in b.code.iter().enumerate() {
             bus.memory.write(routine_base + i as u16, byte);
         }
@@ -416,6 +448,34 @@ impl Bios {
         ];
         for (i, &byte) in skew.iter().enumerate() {
             bus.memory.write(SKEW_ADDR + i as u16, byte);
+        }
+
+        // ── Install Disk Parameter Header (DPH) ──
+        // The DPH is a 16-byte structure that SELDSK returns to BDOS.
+        // BDOS uses offsets 2-7 as scratch workspace (three 16-bit words),
+        // so DIRBUF must be at offset 8, not offset 6.
+        // Layout: XLT(2) + scratch(6) + DIRBUF(2) + DPB(2) + CSV(2) + ALV(2)
+        write_u16(bus, DPH_ADDR + 0, SKEW_ADDR);  // XLT = skew table
+        write_u16(bus, DPH_ADDR + 2, 0x0000);      // Scratch 1
+        write_u16(bus, DPH_ADDR + 4, 0x0000);      // Scratch 2
+        write_u16(bus, DPH_ADDR + 6, 0x0000);      // Scratch 3
+        write_u16(bus, DPH_ADDR + 8, DIRBUF_ADDR);  // DIRBUF
+        write_u16(bus, DPH_ADDR + 10, DPB_ADDR);   // DPB pointer
+        write_u16(bus, DPH_ADDR + 12, CSV_ADDR);   // CSV (check vector)
+        write_u16(bus, DPH_ADDR + 14, ALV_ADDR);   // ALV (allocation vector)
+
+        // ── Clear DIRBUF, CSV, and ALV ──
+        // DIRBUF: 128 bytes, zeroed
+        // CSV: 32 bytes, zeroed (directory checksum area)
+        // ALV: 48 bytes, zeroed (all blocks initially free)
+        for i in 0..128u16 {
+            bus.memory.write(DIRBUF_ADDR + i, 0x00);
+        }
+        for i in 0..32u16 {
+            bus.memory.write(CSV_ADDR + i, 0x00);
+        }
+        for i in 0..48u16 {
+            bus.memory.write(ALV_ADDR + i, 0x00);
         }
 
         // ── Initialize scratch variables ──
@@ -480,17 +540,17 @@ mod tests {
     }
 
     #[test]
-    fn test_wboot_starts_with_mvi_a() {
+    fn test_wboot_starts_correctly() {
         let mut bus = ImsaiBus::new();
         Bios::install_jump_table(&mut bus);
 
-        // Entry 1 (WBOOT) routine should start with MVI A,0x00
+        // Entry 1 (WBOOT) routine should start with LXI SP,0x0000
         let wboot_jmp = BIOS_BASE + 3; // jump table entry 1
         let wboot_target = bus.memory.read(wboot_jmp + 1) as u16
             | (bus.memory.read(wboot_jmp + 2) as u16) << 8;
-        assert_eq!(bus.memory.read(wboot_target), 0x3E, // MVI A
-            "WBOOT should start with MVI A,0x00, got 0x{:02X}", bus.memory.read(wboot_target));
-        assert_eq!(bus.memory.read(wboot_target + 1), 0x00);
+        // WBOOT should start with LXI SP (0x31)
+        assert_eq!(bus.memory.read(wboot_target), 0x31,
+            "WBOOT should start with LXI SP, got 0x{:02X}", bus.memory.read(wboot_target));
     }
 
     #[test]
@@ -534,5 +594,60 @@ mod tests {
             bus.memory.read(sectran_target + i as u16) == 0x26
         });
         assert!(found_mvi_h, "SECTRAN should contain MVI H,0 (0x26)");
+    }
+
+    #[test]
+    fn test_dph_installed() {
+        let mut bus = ImsaiBus::new();
+        Bios::install_jump_table(&mut bus);
+
+        // DPH should be at DPH_ADDR with correct pointers
+        // Layout: XLT(0) + scratch1(2) + scratch2(4) + scratch3(6) + DIRBUF(8) + DPB(10) + CSV(12) + ALV(14)
+        let xlt = bus.memory.read(DPH_ADDR) as u16
+            | (bus.memory.read(DPH_ADDR + 1) as u16) << 8;
+        assert_eq!(xlt, SKEW_ADDR, "XLT should point to skew table");
+
+        // Scratch areas should be zeroed
+        assert_eq!(bus.memory.read(DPH_ADDR + 2), 0x00, "Scratch 1 low");
+        assert_eq!(bus.memory.read(DPH_ADDR + 3), 0x00, "Scratch 1 high");
+        assert_eq!(bus.memory.read(DPH_ADDR + 4), 0x00, "Scratch 2 low");
+        assert_eq!(bus.memory.read(DPH_ADDR + 5), 0x00, "Scratch 2 high");
+        assert_eq!(bus.memory.read(DPH_ADDR + 6), 0x00, "Scratch 3 low");
+        assert_eq!(bus.memory.read(DPH_ADDR + 7), 0x00, "Scratch 3 high");
+
+        let dirbuf = bus.memory.read(DPH_ADDR + 8) as u16
+            | (bus.memory.read(DPH_ADDR + 9) as u16) << 8;
+        assert_eq!(dirbuf, DIRBUF_ADDR, "DIRBUF should point to directory buffer");
+
+        let dpb_ptr = bus.memory.read(DPH_ADDR + 10) as u16
+            | (bus.memory.read(DPH_ADDR + 11) as u16) << 8;
+        assert_eq!(dpb_ptr, DPB_ADDR, "DPB pointer in DPH should point to DPB");
+
+        let csv = bus.memory.read(DPH_ADDR + 12) as u16
+            | (bus.memory.read(DPH_ADDR + 13) as u16) << 8;
+        assert_eq!(csv, CSV_ADDR, "CSV should point to check vector");
+
+        let alv = bus.memory.read(DPH_ADDR + 14) as u16
+            | (bus.memory.read(DPH_ADDR + 15) as u16) << 8;
+        assert_eq!(alv, ALV_ADDR, "ALV should point to allocation vector");
+    }
+
+    #[test]
+    fn test_seldsk_returns_dph() {
+        let mut bus = ImsaiBus::new();
+        Bios::install_jump_table(&mut bus);
+
+        // SELDSK (entry 9) should load HL with DPH_ADDR
+        // Find the SELDSK routine and verify it contains LXI H,DPH_ADDR
+        let seldsk_jmp = BIOS_BASE + 9 * 3;
+        let seldsk_target = bus.memory.read(seldsk_jmp + 1) as u16
+            | (bus.memory.read(seldsk_jmp + 2) as u16) << 8;
+        // Should find LXI H,DPH_ADDR (0x21, lo, hi) somewhere in the routine
+        let found_lxi_h = (0..20).any(|i| {
+            bus.memory.read(seldsk_target + i as u16) == 0x21
+                && (bus.memory.read(seldsk_target + i as u16 + 1) as u16
+                    | (bus.memory.read(seldsk_target + i as u16 + 2) as u16) << 8) == DPH_ADDR
+        });
+        assert!(found_lxi_h, "SELDSK should contain LXI H,DPH_ADDR");
     }
 }

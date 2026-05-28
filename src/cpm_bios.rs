@@ -65,10 +65,9 @@ const CPMB: u16 = BIAS + 0x3400; // 0xE400
 /// CCP starts at CPMB
 const CCP_ADDR: u16 = CPMB; // 0xE400
 
-/// BDOS entry point. In the relocating image, BDOS starts at file offset 0x0900
-/// (CPMB-relative 0x0800). The BDOS function dispatcher (for CALL 5) is at
-/// BDOS+3 = offset 0x0803 from CPMB. After relocation: CPMB + 0x0803.
-const BDOS_ADDR: u16 = CPMB + 0x0803; // 0xEC03
+/// BDOS entry point. In the z80pack 64K CP/M 2.2 image,
+/// BDOS is at 0xEC00 and the function dispatcher is at 0xEC06.
+const BDOS_ADDR: u16 = 0xEC06;
 
 /// Address where the BIOS jump table starts.
 /// In the relocating image, BIOS is at CPMB + 0x1600.
@@ -145,70 +144,119 @@ impl CpmBios {
     /// The DRI cold start scans for JMP/CALL opcodes and relocates addresses.
     /// We do the same, but apply the correct bias per segment.
     pub fn load_and_relocate(bus: &mut ImsaiBus, system_data: &[u8]) {
-        let system_size = system_data.len();
+        let _system_size = system_data.len();
 
-        // Don't copy the boot sector to 0x0000 — it contains CMI5619 code
-        // that's incompatible with our hardware. Our BIOS install sets up
-        // the proper vectors at 0x0000.
+        // Load the system tracks as raw sectors into memory at CPMB (0xE400),
+        // starting from sector 2 (offset 0x80 in the raw image).
+        // This matches how the CMI5619 boot loader works: it reads sectors
+        // 2-78 sequentially into CPMB without any relocation.
+        //
+        // After loading, we apply the DRI relocation to the CCP and BDOS
+        // segments based on where they actually land in memory.
+        const SECTOR_2_OFFSET: usize = 0x80; // skip boot sector
+        let load_len = system_data.len().saturating_sub(SECTOR_2_OFFSET);
 
-        // CCP: file offset 0x0100, assembled with ORG 0x0100
-        // Load at CCP_ADDR (0xE400), add CCP_BIAS to all addresses
-        const CCP_BIAS: u16 = CCP_ADDR - 0x0100; // 0xE300
-        const CCP_FILE_START: usize = 0x0100;
-        const CCP_FILE_END: usize = 0x0900; // BDOS follows CCP
-
-        if CCP_FILE_END > system_size {
-            eprintln!("System image too small");
-            return;
-        }
-
-        // Copy CCP bytes to memory
-        for i in 0..(CCP_FILE_END - CCP_FILE_START) {
-            let mem_addr = CCP_ADDR + i as u16;
-            bus.memory.write(mem_addr, system_data[CCP_FILE_START + i]);
-        }
-
-        // Relocate CCP addresses (scan for JMP/CALL/etc and add CCP_BIAS)
-        Self::relocate_segment(
-            bus,
-            CCP_ADDR,
-            CCP_BIAS,
-            0x0000, // min relocatable address (CCP ORG was 0x0100 but code may reference 0x0000+)
-            0x4000, // max relocatable address
-            CCP_ADDR,
-            (CCP_FILE_END - CCP_FILE_START) as u16,
-        );
-
-        // BDOS: file offset 0x0900, assembled with ORG 0x0000
-        // Load at BDOS_BASE (0xEC00), add BDOS_BASE to all addresses
-        const BDOS_BASE: u16 = CPMB + 0x0800; // 0xEC00
-        const BDOS_FILE_START: usize = 0x0900;
-
-        // BDOS extends to end of system image (before BIOS at file offset ~0x2000)
-        // The CMI5619 system image is 9728 bytes, BIOS starts at offset 0x2000+
-        // For now, copy everything from 0x0900 to the end
-        let bdos_len = system_size - BDOS_FILE_START;
-        for i in 0..bdos_len {
-            let mem_addr = BDOS_BASE.wrapping_add(i as u16);
+        for i in 0..load_len {
+            let mem_addr = CPMB.wrapping_add(i as u16);
             if mem_addr >= BIOS_BASE {
-                break; // Don't overwrite our BIOS area
+                break; // Don't overwrite our BIOS area at 0xFA00
+            }
+            bus.memory.write(mem_addr, system_data[SECTOR_2_OFFSET + i]);
+        }
+
+        println!("Loaded {} bytes raw at CPMB 0x{:04X}", load_len, CPMB);
+
+        // Now apply DRI relocation. The CPM.CPM relocating image has:
+        // - CCP at file offset 0x0100, assembled with ORG 0x0100
+        // - BDOS at file offset 0x0900, assembled with ORG 0x0000
+        //
+        // After our raw load from offset 0x80 to CPMB:
+        // - File offset 0x0100 maps to memory CPMB + (0x100 - 0x80) = 0xE480
+        // - File offset 0x0900 maps to memory CPMB + (0x900 - 0x80) = 0xEC80
+        //
+        // So CCP is at 0xE480 and BDOS is at 0xEC80 in memory.
+        // CCP_BIAS = 0xE480 - 0x0100 = 0xE380
+        // BDOS_BIAS = 0xEC80 (since BDOS was ORG 0)
+        //
+        // But wait — the standard CP/M 2.2 layout expects CCP at 0xE400
+        // and BDOS at 0xEC00. Our CCP at 0xE480 is 0x80 off from standard.
+        // The CMI5619 uses a different layout where the first 128 bytes
+        // (sector 2 = DRI copyright/cold start data) precede the CCP.
+        //
+        // The key insight: the DRI relocating image was DESIGNED for the
+        // cold start code to determine memory size and load the CCP+BDOS
+        // at addresses that correspond to that memory size. The sector 2
+        // data (copyright, etc.) is NOT part of the CCP — it's cold start
+        // data that gets overwritten after the system is configured.
+        //
+        // For a 64K system, the standard layout is:
+        //   CCP  at 0xE400 (CPMB)
+        //   BDOS at 0xEC00 (CPMB + 0x800)
+        //   BIOS at 0xFA00 (CPMB + 0x1600)
+        //
+        // So the correct approach is:
+        // 1. Load CCP from file offset 0x0100 to memory 0xE400
+        // 2. Relocate CCP with BIAS = 0xE400 - 0x0100 = 0xE300
+        // 3. Load BDOS from file offset 0x0900 to memory 0xEC00
+        // 4. Relocate BDOS with BIAS = 0xEC00
+        //
+        // This is what the original code tried to do, but we need to be
+        // careful about NOT relocating data that isn't CCP/BDOS code.
+        // The CMI5619 BIOS at file offsets 0x700+ should be skipped.
+
+        // CCP: file offset 0x0100, load at 0xE400, BIAS = 0xE300
+        const CCP_FILE_START: usize = 0x0100;
+        const CCP_FILE_END: usize = 0x0900; // BDOS follows at 0x900
+        const CCP_BIAS: u16 = CCP_ADDR - 0x0100; // 0xE300
+
+        // Copy CCP to memory at 0xE400
+        if CCP_FILE_END <= system_data.len() {
+            for i in 0..(CCP_FILE_END - CCP_FILE_START) {
+                let mem_addr = CCP_ADDR + i as u16;
+                if mem_addr >= BIOS_BASE {
+                    break;
+                }
+                bus.memory.write(mem_addr, system_data[CCP_FILE_START + i]);
+            }
+
+            // Relocate CCP addresses
+            Self::relocate_segment(
+                bus,
+                CCP_ADDR,
+                CCP_BIAS,
+                0x0000, // min relocatable
+                0x4000, // max relocatable
+                CCP_ADDR,
+                (CCP_FILE_END - CCP_FILE_START) as u16,
+            );
+        }
+
+        // BDOS: file offset 0x0900, load at 0xEC00, BIAS = 0xEC00
+        const BDOS_MEM_BASE: u16 = CPMB + 0x0800; // 0xEC00
+        const BDOS_FILE_START: usize = 0x0900;
+        const BDOS_BIAS: u16 = BDOS_MEM_BASE; // since ORG was 0
+
+        let bdos_len = system_data.len().saturating_sub(BDOS_FILE_START);
+        for i in 0..bdos_len {
+            let mem_addr = BDOS_MEM_BASE.wrapping_add(i as u16);
+            if mem_addr >= BIOS_BASE {
+                break;
             }
             bus.memory.write(mem_addr, system_data[BDOS_FILE_START + i]);
         }
 
-        // Relocate BDOS addresses (add BDOS_BASE to all internal addresses)
+        // Relocate BDOS addresses
         Self::relocate_segment(
             bus,
-            BDOS_BASE,
-            BDOS_BASE, // BDOS bias = BDOS_BASE since ORG was 0
-            0x0000,    // min: BDOS addresses start from 0 (ORG 0)
-            0x4000,    // max: reasonable upper bound for BDOS internal addresses
-            BDOS_BASE,
+            BDOS_MEM_BASE,
+            BDOS_BIAS,
+            0x0000,
+            0x4000,
+            BDOS_MEM_BASE,
             bdos_len as u16,
         );
 
-        // Install our BIOS (replaces the CMI5619 BIOS in the system image)
-        // Removed - CpmBios::install() is not called
+        println!("Applied DRI relocation: CCP BIAS=0x{:04X}, BDOS BIAS=0x{:04X}", CCP_BIAS, BDOS_BIAS);
     }
 
     /// 16-bit address operand that falls within the `[min_addr, max_addr)` range.
@@ -314,7 +362,7 @@ mod tests {
         assert_eq!(BIAS, 0xB000);
         assert_eq!(CPMB, 0xE400);
         assert_eq!(CCP_ADDR, 0xE400);
-        assert_eq!(BDOS_ADDR, 0xEC03);
+        assert_eq!(BDOS_ADDR, 0xEC06);
         assert_eq!(BIOS_BASE, 0xFA00);
         // TPA range: 0x0100 to 0xE3FF = 58,368 bytes
         assert_eq!(CCP_ADDR - 0x0100, 0xE300);

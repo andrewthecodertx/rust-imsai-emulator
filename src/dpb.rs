@@ -1,10 +1,8 @@
-//! CP/M disk parameter block and boot support for the IMSAI 8080 emulator
+//! CP/M disk parameter block for the IMSAI 8080 emulator
 //!
-//! This module defines the CP/M 2.2 disk parameter block (DPB) for the
-//! Tarbell controller's standard 8-inch single-density format, and
-//! provides the boot ROM that loads CP/M from disk into memory.
-//!
-//! The standard Tarbell DPB (IBM 3740 compatible):
+//! Defines the CP/M 2.2 Disk Parameter Block (DPB) for the standard
+//! IBM 3740 single-density 8-inch floppy format used by the z80pack
+//! CP/M 2.2 disk images:
 //!
 //! | Parameter        | Value | Description                        |
 //! |------------------|-------|------------------------------------|
@@ -16,12 +14,12 @@
 //! | DRM              | 63    | Maximum directory entry            |
 //! | AL0              | 0xC0  | Directory alloc bits, high         |
 //! | AL1              | 0x00  | Directory alloc bits, low          |
-//! | CKS              | 32    | Check vector size                 |
-//! | OFF              | 3     | Track offset (reserved tracks)    |
+//! | CKS              | 16    | Check vector size                 |
+//! | OFF              | 2     | Track offset (reserved tracks)    |
 //!
-//! The CP/M system occupies tracks 0-2 (3 reserved tracks). The data
-//! area starts at track 3. Directory entries use 2 allocation blocks
-//! (blocks 0 and 1), giving 64 directory entries.
+//! The CP/M system (boot + CCP + BDOS + BIOS) occupies tracks 0-1
+//! (2 reserved tracks). The directory and data area starts at track 2.
+//! The disk images are compatible with z80pack's cpmsim and imsaisim.
 
 /// Sectors per track (128-byte sectors)
 pub const SPT: u16 = 26;
@@ -40,15 +38,15 @@ pub const AL0: u8 = 0xC0;
 /// Directory allocation bits, low byte
 pub const AL1: u8 = 0x00;
 /// Check vector size (directory entry bytes for hashing)
-pub const CKS: u16 = 32;
+pub const CKS: u16 = 16;
 /// Number of reserved (system) tracks
-pub const OFF: u16 = 3;
+pub const OFF: u16 = 2;
 /// Bytes per sector
 pub const SECTOR_SIZE: usize = 128;
 /// Bytes per allocation block
 pub const BLOCK_SIZE: usize = 1024;
 /// Number of reserved tracks (same as OFF, here for clarity)
-pub const RESERVED_TRACKS: u8 = 3;
+pub const RESERVED_TRACKS: u8 = 2;
 /// Total tracks per disk
 pub const TOTAL_TRACKS: u8 = 77;
 /// Directory entries
@@ -154,8 +152,8 @@ mod tests {
         assert_eq!(dpb.drm, 63);
         assert_eq!(dpb.al0, 0xC0);
         assert_eq!(dpb.al1, 0x00);
-        assert_eq!(dpb.cks, 32);
-        assert_eq!(dpb.off, 3);
+        assert_eq!(dpb.cks, 16);
+        assert_eq!(dpb.off, 2);
     }
 
     #[test]
@@ -181,25 +179,25 @@ mod tests {
         // AL0 = 0xC0, AL1 = 0x00
         assert_eq!(bytes[9], 0xC0);
         assert_eq!(bytes[10], 0x00);
-        // CKS = 32
-        assert_eq!(bytes[11], 0x20);
+        // CKS = 16
+        assert_eq!(bytes[11], 0x10);
         assert_eq!(bytes[12], 0x00);
-        // OFF = 3
-        assert_eq!(bytes[13], 0x03);
+        // OFF = 2
+        assert_eq!(bytes[13], 0x02);
         assert_eq!(bytes[14], 0x00);
     }
 
     #[test]
     fn test_dpb_reserved_sectors() {
         let dpb = DiskParameterBlock::tarbell_standard();
-        // 3 reserved tracks * 26 sectors = 78 sectors
-        assert_eq!(dpb.reserved_sectors(), 78);
+        // 2 reserved tracks * 26 sectors = 52 sectors
+        assert_eq!(dpb.reserved_sectors(), 52);
     }
 
     #[test]
     fn test_dpb_data_capacity() {
         let dpb = DiskParameterBlock::tarbell_standard();
-        // 74 data tracks * 26 sectors * 128 bytes = 246,272 bytes
-        assert_eq!(dpb.data_capacity(), 246_272);
+        // 75 data tracks * 26 sectors * 128 bytes = 249,600 bytes
+        assert_eq!(dpb.data_capacity(), 249_600);
     }
 }

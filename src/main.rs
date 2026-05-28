@@ -8,6 +8,7 @@ fn main() {
     let diag = args.contains(&"--diag".to_string()) || args.contains(&"-d".to_string());
     let step_trace = args.contains(&"--step".to_string()) || args.contains(&"-s".to_string());
     let pc_trace = args.contains(&"--pctrace".to_string()) || args.contains(&"-p".to_string());
+    let hello = args.contains(&"--hello".to_string()) || args.contains(&"--hello-test".to_string());
     let disk_path = args.iter().skip(1).find(|a| !a.starts_with('-')).map(|s| s.as_str());
 
     let mut emu = rust_imsai_emulator::Imsai8080::new();
@@ -15,12 +16,23 @@ fn main() {
     let disk_file = if let Some(path) = disk_path {
         path.to_string()
     } else {
-        let default = "disk_images/cpm22-boot.img";
-        if Path::new(default).exists() {
-            default.to_string()
-        } else {
-            eprintln!("Usage: {} [disk_image.img] [--trace] [--vtrace] [--diag] [--step] [--pctrace]", args.get(0).unwrap());
-            return;
+        let defaults = [
+            "disk_images/cpm22-z80pack.dsk",
+            "disk_images/cpm22-boot.img",
+        ];
+        let mut found = None;
+        for default in defaults {
+            if Path::new(default).exists() {
+                found = Some(default);
+                break;
+            }
+        }
+        match found {
+            Some(path) => path.to_string(),
+            None => {
+                eprintln!("Usage: {} [disk_image.img] [--trace] [--vtrace] [--diag] [--step] [--pctrace] [--hello]", args.get(0).unwrap());
+                return;
+            }
         }
     };
 
@@ -32,9 +44,21 @@ fn main() {
         }
     }
 
-    boot_cpm(&mut emu);
+    // Only run boot_cpm for normal CP/M mode (not hello/console-test)
+    if !args.contains(&"--hello".to_string()) && !args.contains(&"--hello-test".to_string()) &&
+       !args.contains(&"--console-test".to_string()) && !args.contains(&"--ctest".to_string()) {
+        boot_cpm(&mut emu);
+    }
 
-    if step_trace {
+    if args.contains(&"--hybrid".to_string()) || args.contains(&"--hybrid-test".to_string()) {
+        run_hybrid_test(&mut emu, 1_000_000);
+    } else if args.contains(&"--hello".to_string()) || args.contains(&"--hello-test".to_string()) {
+        run_hello(&mut emu);
+        run_hybrid_test(&mut emu, 100000);
+    } else if args.contains(&"--console-test".to_string()) || args.contains(&"--ctest".to_string()) {
+        console_test(&mut emu);
+        run_hybrid_test(&mut emu, 100000);
+    } else if step_trace {
         run_step_trace(&mut emu, 500);
     } else if diag {
         run_diag(&mut emu, 50000);
@@ -45,7 +69,7 @@ fn main() {
     } else if trace {
         run_trace(&mut emu, 50000);
     } else {
-        run_interactive(&mut emu, 5_000_000);
+        run_interactive(&mut emu, 50_000_000);
     }
 }
 
@@ -56,37 +80,136 @@ fn main() {
 /// | 0x0000    | JMP WBOOT (0xFA03)                          |
 /// | 0x0003    | IOBYTE                                       |
 /// | 0x0004    | Current drive                                |
-/// | 0x0005    | JMP BDOS (0xEC03)                            |
+/// | 0x0005    | JMP BDOS (0xEC06)                            |
 /// | 0x0100    | TPA start                                    |
 /// | 0xE400    | CCP (Command Control Program)                |
-/// | 0xEC00    | BDOS                                         |
+/// | 0xEC06    | BDOS                                         |
 /// | 0xFA00    | BIOS (jump table + routines)                 |
+///
+/// We use the z80pack cpmsim 64K CP/M 2.2 disk image which already
+/// has CCP and BDOS assembled for these addresses. No relocation
+/// is needed — we load the system tracks verbatim into memory and
+/// install our own BIOS at 0xFA00.
 const CPMB: u16 = 0xE400;
 
+fn run_hello(emu: &mut rust_imsai_emulator::Imsai8080) {
+    // Load the hello image
+    let disk_path = "disk_images/cpm22.img";
+    if !Path::new(disk_path).exists() {
+        eprintln!("Error: {} not found", disk_path);
+        return;
+    }
+
+    match emu.bus.io.tarbell.insert_disk(0, disk_path) {
+        Ok(()) => println!("Loaded CP/M 2.2 disk"),
+        Err(e) => {
+            eprintln!("Error loading disk '{}': {}", disk_path, e);
+            return;
+        }
+    }
+
+    // Just load boot sector and run - let the boot loader do the work
+    // Load track 0, sector 1 (boot sector) to 0x0080
+    match emu.bus.io.tarbell.get_disk(0) {
+        Some(disk) => {
+            match disk.read_sector(0, 1) {
+                Ok(data) => {
+                    for j in 0..data.len() {
+                        emu.bus.memory.write(0x0080 + j as u16, data[j]);
+                    }
+                    println!("Loaded boot sector to 0x0080");
+                }
+                Err(e) => {
+                    eprintln!("Error reading boot sector: {}", e);
+                    return;
+                }
+            }
+        }
+        None => {
+            eprintln!("No disk in drive 0");
+            return;
+        }
+    }
+
+    // Start execution at boot loader (0x0080)
+    emu.cpu.pc = 0x0080;
+    emu.cpu.sp = 0x0000;
+}
+
+fn console_test(emu: &mut rust_imsai_emulator::Imsai8080) {
+    // Write a tiny test program to 0x0100 that outputs 'X' to console
+    // Program:
+    //   0x0100: MVI A, 'X'    (0x3E, 0x58)
+    //   0x0102: OUT 0x00      (0xD3, 0x00)
+    //   0x0104: JMP 0x0100    (0xC3, 0x00, 0x01)
+    // This loops infinitely, outputting 'X' repeatedly.
+
+    let test_program: [u8; 7] = [
+        0x3E, 0x58, // MVI A, 'X'
+        0xD3, 0x00, // OUT 0x00
+        0xC3, 0x00, 0x01, // JMP 0x0100
+    ];
+
+    for (i, byte) in test_program.iter().enumerate() {
+        emu.bus.memory.write(0x0100 + i as u16, *byte);
+    }
+
+    // Set up stack and start at 0x0100
+    emu.cpu.sp = 0x0000;
+    emu.cpu.pc = 0x0100;
+
+    println!("Console test: PC=0x{:04X}, executing infinite loop outputting 'X'...", emu.cpu.pc);
+}
+
 fn boot_cpm(emu: &mut rust_imsai_emulator::Imsai8080) {
-    use rust_imsai_emulator::dpb;
+    // CP/M 2.2 64K boot: load system tracks from z80pack disk image.
+    //
+    // The z80pack cpmsim CP/M 2.2 disk has CCP+BDOS already assembled
+    // for the 64K layout (CCP=0xE400, BDOS=0xEC06, BIOS=0xFA00).
+    // We load the system tracks verbatim into memory, then install our
+    // own BIOS at 0xFA00 (using Tarbell ports 0x48-0x4B instead of
+    // the z80pack virtual ports 10-16).
+    //
+    // No DRI relocation is needed — the disk image is already a
+    // correct 64K CP/M 2.2 binary image.
+    const BIOS_BASE: u16 = 0xFA00;
+    const BDOS_ENTRY: u16 = 0xEC06;
 
-    let off = dpb::OFF as u8; // 3 reserved tracks
-    let spt = dpb::SPT as u8; // 26 sectors per track
+    let mut mem_addr: u16 = CPMB; // 0xE400
+    let mut sectors_loaded: u16 = 0;
 
-    // Read all system tracks from disk into a buffer.
-    // The system tracks contain the CP/M boot sector, CCP, BDOS, and
-    // the original CMI5619 BIOS. We load them, then use CpmBios to
-    // relocate the CCP and BDOS into their proper memory locations.
-    let sector_size = dpb::SECTOR_SIZE as usize;
-    let system_size = off as usize * spt as usize * sector_size;
-    let mut buf = vec![0u8; system_size];
-    let mut offset = 0usize;
+    // Track 0 sector 1 = boot sector (for WBOOT reference), skip it
+    // Tracks 0-1, sectors 2+: system data (CCP+BDOS+BIOS on disk)
+    for track in 0..2u8 {
+        for sector in 1..=26u8 {
+            if track == 0 && sector == 1 {
+                continue; // skip boot sector
+            }
 
-    for track in 0..off {
-        for sector in 1..=spt {
             match emu.bus.io.tarbell.get_disk(0) {
                 Some(disk) => {
                     match disk.read_sector(track, sector) {
                         Ok(data) => {
-                            let end = std::cmp::min(offset + data.len(), system_size);
-                            buf[offset..end].copy_from_slice(&data[..end - offset]);
-                            offset = end;
+                            if mem_addr >= BIOS_BASE {
+                                // Don't overwrite BIOS area
+                                continue;
+                            }
+                            let end = mem_addr as usize + data.len();
+                            if end > BIOS_BASE as usize {
+                                // Partial write up to BIOS boundary
+                                let avail = BIOS_BASE - mem_addr;
+                                for j in 0..avail as usize {
+                                    emu.bus.memory.write(mem_addr + j as u16, data[j]);
+                                }
+                                mem_addr = BIOS_BASE;
+                                sectors_loaded += 1;
+                                continue;
+                            }
+                            for j in 0..data.len() {
+                                emu.bus.memory.write(mem_addr + j as u16, data[j]);
+                            }
+                            mem_addr += data.len() as u16;
+                            sectors_loaded += 1;
                         }
                         Err(e) => {
                             eprintln!("Error reading track {} sector {}: {}", track, sector, e);
@@ -102,49 +225,29 @@ fn boot_cpm(emu: &mut rust_imsai_emulator::Imsai8080) {
         }
     }
 
-    println!("Read {} bytes from system tracks", offset);
+    let bytes_loaded = mem_addr - CPMB;
+    println!("Loaded {} sectors ({} bytes) at 0x{:04X}-0x{:04X}",
+        sectors_loaded, bytes_loaded, CPMB, CPMB + bytes_loaded - 1);
 
-    // Use CpmBios::load_and_relocate() to properly load the DRI relocating
-    // image format into memory with correct bias computation per segment.
-    rust_imsai_emulator::CpmBios::load_and_relocate(&mut emu.bus, &buf);
+    // Print CCP header for verification
+    println!("CCP header at 0x{:04X}: {:02X} {:02X} {:02X} {:02X}",
+        CPMB, emu.bus.memory.read(CPMB), emu.bus.memory.read(CPMB+1),
+        emu.bus.memory.read(CPMB+2), emu.bus.memory.read(CPMB+3));
 
-    // Install our custom BIOS at 0xFA00. This replaces the CMI5619 BIOS
-    // with our emulator-compatible version that uses the correct I/O ports
-    // (0x00-0x01 for console, 0x48-0x4B for Tarbell controller).
-    // This also sets up the system vectors at 0x0000 and 0x0005.
+    // Install our custom BIOS at 0xFA00.
     rust_imsai_emulator::Bios::install_jump_table(&mut emu.bus);
 
-    // Debug: verify key memory locations
-    println!("Boot vectors:");
-    println!("  0x0000: {:02X} {:02X} {:02X}  (should be C3 03 FA = JMP 0xFA03)",
-        emu.bus.memory.read(0x0000), emu.bus.memory.read(0x0001), emu.bus.memory.read(0x0002));
-    println!("  0x0005: {:02X} {:02X} {:02X}  (should be C3 03 EC = JMP 0xEC03)",
-        emu.bus.memory.read(0x0005), emu.bus.memory.read(0x0006), emu.bus.memory.read(0x0007));
-    println!("  CPMB:   {:02X} {:02X} {:02X} {:02X}  (CCP first bytes)",
-        emu.bus.memory.read(CPMB), emu.bus.memory.read(CPMB + 1),
-        emu.bus.memory.read(CPMB + 2), emu.bus.memory.read(CPMB + 3));
-    println!("  CPMB+0x100: {:02X} {:02X} {:02X} {:02X}",
-        emu.bus.memory.read(CPMB + 0x100), emu.bus.memory.read(CPMB + 0x101),
-        emu.bus.memory.read(CPMB + 0x102), emu.bus.memory.read(CPMB + 0x103));
-    println!("  0xE500: {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X}",
-        emu.bus.memory.read(0xE500), emu.bus.memory.read(0xE501),
-        emu.bus.memory.read(0xE502), emu.bus.memory.read(0xE503),
-        emu.bus.memory.read(0xE504), emu.bus.memory.read(0xE505),
-        emu.bus.memory.read(0xE506), emu.bus.memory.read(0xE507));
-    println!("  BDOS:   {:02X} {:02X} {:02X} {:02X} {:02X} {:02X}",
-        emu.bus.memory.read(0xEC00), emu.bus.memory.read(0xEC01),
-        emu.bus.memory.read(0xEC02), emu.bus.memory.read(0xEC03),
-        emu.bus.memory.read(0xEC04), emu.bus.memory.read(0xEC05));
-    println!("  BIOS:   {:02X} {:02X} {:02X}  (first JMP entry)",
-        emu.bus.memory.read(0xFA00), emu.bus.memory.read(0xFA01),
-        emu.bus.memory.read(0xFA02));
+    // Verify vectors
+    println!("Vectors: 0x0000={:02X}{:02X}{:02X} 0x0005={:02X}{:02X}{:02X}",
+        emu.bus.memory.read(0), emu.bus.memory.read(1), emu.bus.memory.read(2),
+        emu.bus.memory.read(5), emu.bus.memory.read(6), emu.bus.memory.read(7));
 
-    // Start execution at the WBOOT vector (0x0000)
-    emu.cpu.pc = 0x0000;
+    // Start at CCP — the CCP cold-start entry at 0xE400.
+    // CCP will initialize itself, set up 0x0000/0x0005, call BIOS BOOT,
+    // which prints the sign-on and enters the command loop.
+    emu.cpu.pc = CPMB;
     emu.cpu.sp = 0x0000;
 }
-
-/// Step-by-step instruction trace
 fn run_step_trace(emu: &mut rust_imsai_emulator::Imsai8080, max: u64) {
     println!("=== STEP TRACE ({} instructions) ===", max);
     let mut count: u64 = 0;
@@ -274,6 +377,26 @@ fn run_interactive(emu: &mut rust_imsai_emulator::Imsai8080, max_instructions: u
     } else {
         println!("\n(no display output)");
     }
+
+    // Memory dump for debugging
+    println!("\n=== MEMORY DUMP ===");
+    dump_memory(&emu, 0x0000, 8, "Vectors");
+    dump_memory(&emu, 0x0100, 16, "TPA");
+    dump_memory(&emu, 0xF9F0, 48, "BDOS data/DPH area");
+    dump_memory(&emu, 0xFB20, 48, "Our DPH+DIRBUF");
+    dump_memory(&emu, 0xFBB0, 48, "CSV+ALV");
+    dump_memory(&emu, 0xFA00, 8, "BIOS jump table");
+}
+
+fn dump_memory(emu: &rust_imsai_emulator::Imsai8080, start: u16, len: usize, label: &str) {
+    print!("\n0x{:04X}: {} = ", start, label);
+    for i in 0..len {
+        if i > 0 && i % 16 == 0 {
+            print!("\n        ");
+        }
+        print!("{:02X} ", emu.bus.memory.read(start + i as u16));
+    }
+    println!();
 }
 
 fn run_trace(emu: &mut rust_imsai_emulator::Imsai8080, max: u64) {
@@ -296,7 +419,7 @@ fn run_trace(emu: &mut rust_imsai_emulator::Imsai8080, max: u64) {
 /// Dumps the buffer and I/O log at the end so you can see exactly
 /// what the CPU was doing right before it stopped or got stuck.
 fn run_pc_trace(emu: &mut rust_imsai_emulator::Imsai8080, max: u64) {
-    const RING_SIZE: usize = 2048;
+    const RING_SIZE: usize = 8192;
     println!("=== PC TRACE ({} instructions, ring={}) ===", max, RING_SIZE);
 
     // Ring buffer entries: (count, pc, op_bytes, A, B, C, D, E, H, L, SP, flags)
@@ -311,6 +434,15 @@ fn run_pc_trace(emu: &mut rust_imsai_emulator::Imsai8080, max: u64) {
     // CALL 5 tracker
     let mut call5_count: u64 = 0;
     let mut last_call5_func: u8 = 0;
+
+    // Early trace: capture first 200 instructions
+    const EARLY_TRACE_SIZE: usize = 200;
+    let mut early_trace: Vec<(u64, u16, [u8; 4], u8, u8, u8, u8, u8, u8, u8, u16, u8)> = Vec::new();
+
+    // Region transition log: record when PC crosses a major boundary
+    // (e.g., from BIOS area to CCP, or from CCP to TPA)
+    let mut last_region: u8 = 0; // 0=zero-page, 1=TPA, 2=CCP, 3=BDOS, 4=BIOS, 5=other
+    let mut transitions: Vec<(u64, u16, u8, u8)> = Vec::new(); // (count, pc, from, to)
 
     let mut count: u64 = 0;
     loop {
@@ -357,6 +489,23 @@ fn run_pc_trace(emu: &mut rust_imsai_emulator::Imsai8080, max: u64) {
             io_log.push((count, port, a, false));
         }
 
+        // Track region transitions
+        let region = if pc < 0x0100 { 0u8 } // zero page
+            else if pc < 0xE400 { 1 }       // TPA
+            else if pc < 0xEC00 { 2 }       // CCP
+            else if pc < 0xFA00 { 3 }      // BDOS
+            else if pc < 0xFE00 { 4 }      // BIOS
+            else { 5 };                    // other/unused
+        if region != last_region {
+            transitions.push((count, pc, last_region, region));
+            last_region = region;
+        }
+
+        // Write to early trace
+        if early_trace.len() < EARLY_TRACE_SIZE {
+            early_trace.push((count, pc, op_bytes, a, b, c, d, e, h, l, sp, flags));
+        }
+
         // Write to ring buffer
         if ring.len() < RING_SIZE {
             ring.push((count, pc, op_bytes, a, b, c, d, e, h, l, sp, flags));
@@ -371,16 +520,44 @@ fn run_pc_trace(emu: &mut rust_imsai_emulator::Imsai8080, max: u64) {
         }
     }
 
-    // Dump ring buffer in chronological order
-    println!("\n=== LAST {} INSTRUCTIONS ===", ring.len().min(RING_SIZE));
+    // Dump early trace
+    println!("\n=== FIRST {} INSTRUCTIONS ===", early_trace.len());
+    for (cnt, pc, bytes, a, b, c, d, e, h, l, sp, flags) in &early_trace {
+        let desc = disassemble_8080(*pc, *bytes);
+        println!("{:8}: PC={:04X} {:30} A={:02X} BC={:02X}{:02X} DE={:02X}{:02X} HL={:02X}{:02X} SP={:04X} F={:02X}",
+            cnt, pc, desc, a, b, c, d, e, h, l, sp, flags);
+    }
+
+    // Dump region transitions
+    let region_names = ["ZEROPAGE", "TPA     ", "CCP     ", "BDOS    ", "BIOS    ", "OTHER   "];
+    println!("\n=== REGION TRANSITIONS ===");
+    for (cnt, pc, from, to) in &transitions {
+        println!("  {:8}: PC=0x{:04X} {} -> {}",
+            cnt, pc, region_names[*from as usize], region_names[*to as usize]);
+    }
+
+    // Dump ring buffer (tail) — only non-NOP
+    println!("\n=== LAST {} INSTRUCTIONS (non-NOP only) ===", ring.len().min(RING_SIZE));
     let start = if ring_full { ring_idx } else { 0 };
     let len = ring.len().min(RING_SIZE);
+    let mut nop_count: u64 = 0;
     for i in 0..len {
         let idx = (start + i) % len;
         let (cnt, pc, bytes, a, b, c, d, e, h, l, sp, flags) = ring[idx];
+        if bytes[0] == 0x00 {
+            nop_count += 1;
+            continue;
+        }
+        if nop_count > 0 {
+            println!("  ... {} NOP instructions ...", nop_count);
+            nop_count = 0;
+        }
         let desc = disassemble_8080(pc, bytes);
         println!("{:8}: PC={:04X} {:30} A={:02X} BC={:02X}{:02X} DE={:02X}{:02X} HL={:02X}{:02X} SP={:04X} F={:02X}",
             cnt, pc, desc, a, b, c, d, e, h, l, sp, flags);
+    }
+    if nop_count > 0 {
+        println!("  ... {} NOP instructions ...", nop_count);
     }
 
     // Dump I/O log
@@ -632,4 +809,123 @@ fn run_verbose_trace(emu: &mut rust_imsai_emulator::Imsai8080, max: u64) {
     }
 
     println!("\nStopped at PC=0x{:04X} after {} instructions", emu.cpu.pc, count);
+}
+
+/// Hybrid test: runs at full speed with periodic display flush and I/O logging.
+/// Goal: quickly determine if *any* console or disk I/O is happening.
+///
+/// Also serves as a "console output test" — if no OUT to video ports,
+/// the problem is not in BIOS but in the program not running.
+fn run_hybrid_test(emu: &mut rust_imsai_emulator::Imsai8080, max_instructions: u64) {
+    println!("=== HYBRID TEST ({} instructions) ===", max_instructions);
+    println!("Running at full speed with periodic flushes...");
+
+    let mut count: u64 = 0;
+    let mut video_chars: Vec<char> = Vec::new();
+    let mut io_events: Vec<(u64, char, u8, u8)> = Vec::new(); // (count, dir, port, value)
+    let mut last_console_out: u64 = 0;
+    let mut last_disk_out: u64 = 0;
+    let flush_interval: u64 = 10000;
+
+    // Track whether we've *ever* seen output to console or disk
+    let mut ever_saw_console_out: bool = false;
+    let mut ever_saw_disk_out: bool = false;
+
+    loop {
+        // Step batches of 1000 and flush video buffer periodically
+        for _ in 0..flush_interval {
+            let pc = emu.cpu.pc;
+            let op = emu.bus.memory.read(pc);
+
+            emu.step();
+            count += 1;
+
+            // Monitor I/O
+            if op == 0xD3 {
+                let port = emu.bus.memory.read(pc + 1);
+                let val = emu.cpu.a;
+                if port == 0x00 || port == 0x01 {
+                    io_events.push((count, 'O', port, val));
+                    last_console_out = count;
+                    if port == 0x00 && val >= 32 && val < 127 {
+                        video_chars.push(val as char);
+                        ever_saw_console_out = true;
+                    }
+                } else if (0x48..=0x4B).contains(&port) || (0xF8..0xFD).contains(&port) {
+                    io_events.push((count, 'O', port, val));
+                    last_disk_out = count;
+                    ever_saw_disk_out = true;
+                }
+            } else if op == 0xDB {
+                let port = emu.bus.memory.read(pc + 1);
+                if (0x48..=0x4B).contains(&port) || (0xF8..0xFD).contains(&port) {
+                    io_events.push((count, 'I', port, emu.cpu.a));
+                }
+            }
+
+            if emu.cpu.halted || count >= max_instructions {
+                break;
+            }
+        }
+
+        // Flush display every flush_interval steps (or if HLT)
+        let display = emu.bus.io.video.get_display_string();
+        for c in display.chars().filter(|c| *c != ' ') {
+            video_chars.push(c);
+            ever_saw_console_out = true;
+        }
+
+        // Print I/O activity summary
+        if last_console_out > 0 && count - last_console_out <= flush_interval {
+            let recent_video: String = video_chars.iter().skip(video_chars.len().saturating_sub(40)).collect();
+            println!("[console @ {:8}] PC=0x{:04X} A=0x{:02X} video='{}'", last_console_out, emu.cpu.pc, 
+                io_events.last().map_or(0,|e|if e.1=='O' {e.3}else{0}), recent_video);
+            video_chars.clear();
+        }
+        if last_disk_out > 0 && count - last_disk_out <= flush_interval {
+            println!("[disk    @ {:8}] PC=0x{:04X}", last_disk_out, emu.cpu.pc);
+        }
+
+        if emu.cpu.halted || count >= max_instructions {
+            break;
+        }
+    }
+
+    println!("\n=== HYBRID TEST RESULTS ===");
+    println!("Finished {} instructions at PC=0x{:04X}", count, emu.cpu.pc);
+    println!("I/O events: {} ({} OUT, {} IN)", io_events.len(),
+        io_events.iter().filter(|e| e.1 == 'O').count(),
+        io_events.iter().filter(|e| e.1 == 'I').count());
+    println!("Ever saw console output: {}", ever_saw_console_out);
+    println!("Ever saw disk output: {}", ever_saw_disk_out);
+
+    // Build final display string from captured chars
+    let final_display: String = video_chars.iter().collect();
+    if !final_display.is_empty() {
+        println!("\nFinal display content:\n---\n{}\n---", final_display);
+    } else {
+        println!("\n(no visible display output captured)");
+    }
+
+    // Show first/last console OUT
+    let console_outs: Vec<_> = io_events.iter().filter(|e| e.2 == 0x00 || e.2 == 0x01).collect();
+    if !console_outs.is_empty() {
+        println!("\nFirst console OUT: {:8} A=0x{:02X} ('{}')",
+            console_outs.first().unwrap().0, console_outs.first().unwrap().2, console_outs.first().unwrap().3 as char);
+        println!("Last  console OUT: {:8} A=0x{:02X} ('{}')",
+            console_outs.last().unwrap().0, console_outs.last().unwrap().2, console_outs.last().unwrap().3 as char);
+    } else {
+        println!("\n(no console OUT detected)");
+    }
+
+    // Show first/last disk I/O (Tarbell 0x48–0x4B)
+    let tarbell_outs: Vec<_> = io_events.iter().filter(|e| (0x48..=0x4B).contains(&e.2)).collect();
+    if !tarbell_outs.is_empty() {
+        println!("\nFirst Tarbell OUT: {:8} port=0x{:02X} A=0x{:02X}",
+            tarbell_outs.first().unwrap().0, tarbell_outs.first().unwrap().2, tarbell_outs.first().unwrap().3);
+        println!("Last  Tarbell OUT: {:8} port=0x{:02X} A=0x{:02X}",
+            tarbell_outs.last().unwrap().0, tarbell_outs.last().unwrap().2, tarbell_outs.last().unwrap().3);
+    } else {
+        println!("\n(no Tarbell 0x48–0x4B OUT detected)");
+    }
 }

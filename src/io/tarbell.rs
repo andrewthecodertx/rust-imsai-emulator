@@ -197,6 +197,7 @@ impl TarbellController {
                     if self.buffer_position >= SECTOR_SIZE {
                         self.reading = false;
                         self.status &= !STATUS_BUSY;
+                        // DRQ will be cleared by update_status() since reading is now false
                     }
                     value
                 } else {
@@ -270,6 +271,19 @@ impl TarbellController {
                 self.status |= STATUS_NOT_READY;
             }
         }
+
+        // Set DRQ (Data Request) bit if data is available to read
+        const STATUS_DRQ: u8 = 0x02;
+        if self.reading && self.buffer_position < SECTOR_SIZE {
+            self.status |= STATUS_DRQ;
+        } else {
+            self.status &= !STATUS_DRQ;
+        }
+
+        // Set BUSY bit during active read/write operations
+        if self.reading || self.writing {
+            self.status |= STATUS_BUSY;
+        }
     }
 
     /// Execute an FD1771 command
@@ -337,7 +351,8 @@ impl TarbellController {
                         self.buffer_position = 0;
                         self.reading = true;
                         self.error = false;
-                        self.status &= !STATUS_BUSY;
+                        // Don't clear BUSY here - update_status() manages it.
+                        // BUSY will be cleared when all bytes are read.
                     }
                     Err(_) => {
                         self.error = true;
