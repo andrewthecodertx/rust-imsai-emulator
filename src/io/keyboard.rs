@@ -4,8 +4,6 @@
 //! to provide input to the emulated system. It implements a simple
 //! serial interface similar to what would be found in real S-100 systems.
 
-use std::io;
-
 /// Keyboard controller for the IMSAI 8080
 pub struct Keyboard {
     /// Buffer for incoming keystrokes
@@ -36,23 +34,20 @@ impl Keyboard {
     }
 
     /// Read a character from the keyboard
-    /// This function will block until a character is available
+    /// Returns 0 if no character is available (non-blocking).
+    /// Callers should check is_char_ready() first to avoid reading 0.
     pub fn read_char(&mut self) -> u8 {
         if self.position < self.buffer.len() {
             let ch = self.buffer[self.position];
             self.position += 1;
+            // Compact: if we've consumed all buffered chars, reset
+            if self.position >= self.buffer.len() {
+                self.buffer.clear();
+                self.position = 0;
+            }
             ch
         } else {
-            // If no buffered characters, read directly from stdin
-            let mut input = String::new();
-            io::stdin()
-                .read_line(&mut input)
-                .expect("Failed to read line");
-            if !input.is_empty() {
-                input.as_bytes()[0]
-            } else {
-                0
-            }
+            0
         }
     }
 

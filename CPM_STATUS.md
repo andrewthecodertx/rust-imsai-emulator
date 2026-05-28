@@ -2,7 +2,7 @@
 
 ## Summary
 
-The **IMSAI 8080 emulator successfully boots CP/M 2.2** and displays the `A>` prompt.
+The **IMSAI 8080 emulator successfully boots CP/M 2.2** and displays the `A>` prompt. **Interactive terminal mode** is now available with real keyboard input and console output.
 
 ## What Works
 
@@ -17,6 +17,7 @@ The **IMSAI 8080 emulator successfully boots CP/M 2.2** and displays the `A>` pr
   - Sector translation with 6:1 interleave skew table
   - Disk Parameter Header (DPH) with proper layout for BDOS compatibility
 - **BDOS integration**: CP/M BDOS successfully reads the directory, writes to console
+- **Interactive terminal mode**: Real-time keyboard input via crossterm, live console output
 
 ## Architecture
 
@@ -61,8 +62,11 @@ Memory Map (64K):
 ## Commands for Running
 
 ```bash
-# Normal run (shows A> prompt after ~5M instructions):
+# Interactive terminal mode (default):
 ./target/release/rust-imsai-emulator disk_images/cpm22-z80pack.dsk
+
+# Batch mode (non-interactive, 50M instructions):
+./target/release/rust-imsai-emulator disk_images/cpm22-z80pack.dsk --batch
 
 # With diagnostics:
 ./target/release/rust-imsai-emulator disk_images/cpm22-z80pack.dsk --pctrace
@@ -73,18 +77,30 @@ Memory Map (64K):
 ./target/release/rust-imsai-emulator disk_images/cpm22-boot.img
 ```
 
+## Terminal Mode Controls
+
+- **Keyboard input**: Characters are sent to CP/M CONIN (uppercase conversion applied)
+- **Enter**: Sends CR (0x0D) to CP/M
+- **Backspace/Delete**: Sends DEL (0x7F) to CP/M
+- **Escape**: Sends ESC (0x1B) to CP/M
+- **Ctrl+key**: Sends control characters (Ctrl+C = 0x03, etc.)
+- **Ctrl+]**: Exit the emulator
+
 ## Current Limitations
 
-- No keyboard input yet ( CONST always returns "character ready")
-- No TIM/interactive mode for typing commands
-- The emulator runs a fixed number of instructions and stops
 - Only the first disk drive (A:) is functional
+- No CP/M program execution testing yet (DIR, TYPE, etc.)
+- Only 8" SSSD floppy format (77 tracks, 26 sectors, 128 bytes/sector)
+- Writing to disk is implemented but untested
+- The emulator runs at a fixed speed without cycle-accurate timing
 
 ## Files to Review
 
 - **`src/bios.rs`** - CP/M 2.2 BIOS implementation (jump table + routines)
 - **`src/cpm_bios.rs`** - DRI relocating-image support (for CMI5619 images)
-- **`src/main.rs`** - Emulator main loop and test modes
+- **`src/main.rs`** - Emulator main loop and terminal mode
+- **`src/io/keyboard.rs`** - Keyboard input interface
+- **`src/io/video.rs`** - Video display with auto-render toggle
 - **`src/io/tarbell.rs`** - Tarbell disk controller with FD1771 emulation
 - **`src/disk.rs`** - Disk image management (8" SSSD format)
 - **`src/dpb.rs`** - Disk Parameter Block definitions

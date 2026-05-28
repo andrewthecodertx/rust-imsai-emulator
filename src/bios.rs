@@ -176,7 +176,6 @@ impl Bios {
         // ── Build BIOS routines ──
         let routine_base = BIOS_BASE + (NUM_ENTRIES as u16) * 3;
         let mut b = CodeBuilder::new(routine_base);
-        eprintln!("DEBUG: BIOS routine_base = 0x{:04X}, jump table size = {} bytes", routine_base, (NUM_ENTRIES as u16) * 3);
         let mut entry_addrs: [u16; NUM_ENTRIES] = [0; NUM_ENTRIES];
 
         // Entry 0: BOOT — debug marker, fall through to WBOOT

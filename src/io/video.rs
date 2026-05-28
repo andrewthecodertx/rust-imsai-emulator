@@ -18,6 +18,8 @@ pub struct VideoDisplay {
     height: usize,
     /// Text buffer for the display
     buffer: Vec<Vec<char>>,
+    /// Whether to render to stdout on every write (disabled in terminal mode)
+    pub auto_render: bool,
 }
 
 impl VideoDisplay {
@@ -34,6 +36,7 @@ impl VideoDisplay {
             width,
             height,
             buffer,
+            auto_render: true,
         }
     }
 
@@ -112,6 +115,9 @@ impl VideoDisplay {
 
     /// Render the display to stdout
     pub fn render(&self) {
+        if !self.auto_render {
+            return;
+        }
         // Move cursor to top-left of terminal
         print!("\x1B[H");
 

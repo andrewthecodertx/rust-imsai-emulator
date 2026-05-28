@@ -1,5 +1,13 @@
 use std::env;
 use std::path::Path;
+use std::io::{self, Write};
+use std::time::Instant;
+
+use crossterm::{
+    event::{self, Event, KeyCode, KeyEvent, KeyModifiers},
+    terminal::{EnterAlternateScreen, LeaveAlternateScreen, enable_raw_mode, disable_raw_mode},
+    ExecutableCommand,
+};
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -8,7 +16,8 @@ fn main() {
     let diag = args.contains(&"--diag".to_string()) || args.contains(&"-d".to_string());
     let step_trace = args.contains(&"--step".to_string()) || args.contains(&"-s".to_string());
     let pc_trace = args.contains(&"--pctrace".to_string()) || args.contains(&"-p".to_string());
-    let hello = args.contains(&"--hello".to_string()) || args.contains(&"--hello-test".to_string());
+    let _hello = args.contains(&"--hello".to_string()) || args.contains(&"--hello-test".to_string());
+    let batch_mode = args.contains(&"--batch".to_string()) || args.contains(&"-b".to_string());
     let disk_path = args.iter().skip(1).find(|a| !a.starts_with('-')).map(|s| s.as_str());
 
     let mut emu = rust_imsai_emulator::Imsai8080::new();
@@ -30,7 +39,7 @@ fn main() {
         match found {
             Some(path) => path.to_string(),
             None => {
-                eprintln!("Usage: {} [disk_image.img] [--trace] [--vtrace] [--diag] [--step] [--pctrace] [--hello]", args.get(0).unwrap());
+                eprintln!("Usage: {} [disk_image.img] [--trace] [--vtrace] [--diag] [--step] [--pctrace] [--hello] [--batch]", args.get(0).unwrap());
                 return;
             }
         }
@@ -68,8 +77,10 @@ fn main() {
         run_verbose_trace(&mut emu, 200000);
     } else if trace {
         run_trace(&mut emu, 50000);
-    } else {
+    } else if batch_mode {
         run_interactive(&mut emu, 50_000_000);
+    } else {
+        run_terminal(&mut emu);
     }
 }
 
@@ -173,7 +184,7 @@ fn boot_cpm(emu: &mut rust_imsai_emulator::Imsai8080) {
     // No DRI relocation is needed — the disk image is already a
     // correct 64K CP/M 2.2 binary image.
     const BIOS_BASE: u16 = 0xFA00;
-    const BDOS_ENTRY: u16 = 0xEC06;
+    const _BDOS_ENTRY: u16 = 0xEC06;
 
     let mut mem_addr: u16 = CPMB; // 0xE400
     let mut sectors_loaded: u16 = 0;
@@ -343,6 +354,174 @@ fn run_diag(emu: &mut rust_imsai_emulator::Imsai8080, max: u64) {
     } else {
         println!("\n(no display output)");
     }
+}
+
+/// Interactive terminal mode: raw terminal, real-time keyboard input, live console output.
+/// This is the primary user-facing mode for running CP/M interactively.
+fn run_terminal(emu: &mut rust_imsai_emulator::Imsai8080) {
+    // Try to enable raw mode; fall back to batch mode if no TTY
+    if enable_raw_mode().is_err() {
+        eprintln!("No TTY available, falling back to batch mode (use --batch to force)");
+        run_interactive(emu, 50_000_000);
+        return;
+    }
+
+    // Disable auto-rendering of video display (we handle output directly)
+    emu.bus.io.video.auto_render = false;
+
+    let mut stdout = io::stdout();
+    stdout.execute(EnterAlternateScreen).expect("Failed to enter alternate screen");
+    stdout.flush().ok();
+
+    // Print welcome banner
+    print!("\r\nIMSAI 8080 - CP/M 2.2 Terminal\r\nPress Ctrl+] to exit\r\n---\r\n");
+    stdout.flush().ok();
+
+    let batch_size: u64 = 5000;
+    let idle_sleep = std::time::Duration::from_millis(5);
+    let poll_timeout = std::time::Duration::from_millis(0);
+    let mut instruction_count: u64 = 0;
+    let mut idle_count: u64 = 0;
+
+    let start_time = Instant::now();
+
+    loop {
+        // Run a batch of CPU instructions
+        for _ in 0..batch_size {
+            let pc = emu.cpu.pc;
+            let op = emu.bus.memory.read(pc);
+
+            emu.step();
+            instruction_count += 1;
+
+            // Intercept OUT 0x00/0x7B (console data) to print directly to terminal
+            if op == 0xD3 {
+                let port = emu.bus.memory.read(pc + 1);
+                if port == 0x00 || port == 0x7B {
+                    let ch = emu.cpu.a;
+                    if ch == 0x0D {
+                        print!("\r");
+                    } else if ch == 0x0A {
+                        print!("\n");
+                    } else if ch == 0x08 {
+                        // Backspace: move left, clear, move left
+                        print!("\x08 \x08");
+                    } else if ch >= 0x20 && ch < 0x7F {
+                        print!("{}", ch as char);
+                    }
+                    // Control chars below 0x20 (except CR/LF/BS) are silently ignored
+                    stdout.flush().ok();
+                }
+            }
+
+            if emu.cpu.halted {
+                break;
+            }
+        }
+
+        // After the batch, check for keyboard input (non-blocking)
+        let mut got_key = false;
+        while event::poll(poll_timeout).unwrap_or(false) {
+            if let Ok(ev) = event::read() {
+                match ev {
+                    Event::Key(key_event) => {
+                        match key_event {
+                            KeyEvent { code: KeyCode::Esc, .. } => {
+                                // Escape key: send ESC (0x1B) to CP/M
+                                emu.bus.io.keyboard.type_text("\x1B");
+                                got_key = true;
+                            }
+                            KeyEvent { code: KeyCode::Char(']'), modifiers: KeyModifiers::CONTROL, .. } => {
+                                print!("\r\n\r\n--- Ctrl+] pressed, exiting ---\r\n");
+                                stdout.flush().ok();
+                                stdout.execute(LeaveAlternateScreen).ok();
+                                disable_raw_mode().ok();
+                                let elapsed = start_time.elapsed();
+                                print_instructions_summary(instruction_count, elapsed);
+                                return;
+                            }
+                            KeyEvent { code: KeyCode::Char(ch), modifiers: KeyModifiers::CONTROL, .. } => {
+                                // Ctrl+key: send as control character (A=0x01, B=0x02, etc.)
+                                let ctrl_ch = (ch as u8) & 0x1F;
+                                if ctrl_ch != 0 {
+                                    let buf = [ctrl_ch];
+                                    emu.bus.io.keyboard.type_text(&String::from_utf8_lossy(&buf));
+                                    got_key = true;
+                                }
+                            }
+                            KeyEvent { code: KeyCode::Char(ch), .. } => {
+                                // Regular character: convert to uppercase for CP/M
+                                let byte = if ch == '\n' || ch == '\r' {
+                                    0x0D_u8 // CR for CP/M
+                                } else {
+                                    ch.to_ascii_uppercase() as u8
+                                };
+                                let buf = [byte];
+                                emu.bus.io.keyboard.type_text(&String::from_utf8_lossy(&buf));
+                                got_key = true;
+                            }
+                            KeyEvent { code: KeyCode::Enter, .. } => {
+                                emu.bus.io.keyboard.type_text("\r");
+                                got_key = true;
+                            }
+                            KeyEvent { code: KeyCode::Backspace, .. } => {
+                                emu.bus.io.keyboard.type_text("\x7F");
+                                got_key = true;
+                            }
+                            KeyEvent { code: KeyCode::Delete, .. } => {
+                                emu.bus.io.keyboard.type_text("\x7F");
+                                got_key = true;
+                            }
+                            KeyEvent { code: KeyCode::Tab, .. } => {
+                                emu.bus.io.keyboard.type_text("\t");
+                                got_key = true;
+                            }
+                            _ => {} // Ignore other key events
+                        }
+                    }
+                    Event::Resize(_, _) => {
+                        // Terminal resize - CP/M doesn't care
+                    }
+                    _ => {} // Ignore mouse and other events
+                }
+            }
+        }
+
+        if emu.cpu.halted {
+            print!("\r\n\r\n--- CPU HALTED ---\r\n");
+            break;
+        }
+
+        // If no key was pressed and the keyboard buffer is empty,
+        // we're likely in the CONIN spin loop. Sleep briefly to
+        // avoid burning 100% CPU.
+        if !got_key && !emu.bus.io.keyboard.is_char_ready() {
+            idle_count += 1;
+            if idle_count > 5 {
+                // After 5 idle batches, start sleeping to reduce CPU usage.
+                // This means we'll still check for input every 5ms, which
+                // gives ~200Hz polling rate - more than enough for typing.
+                std::thread::sleep(idle_sleep);
+            }
+        } else {
+            idle_count = 0;
+        }
+    }
+
+    // Cleanup terminal
+    print!("\r\n");
+    stdout.execute(LeaveAlternateScreen).ok();
+    disable_raw_mode().ok();
+
+    let elapsed = start_time.elapsed();
+    print_instructions_summary(instruction_count, elapsed);
+}
+
+fn print_instructions_summary(count: u64, elapsed: std::time::Duration) {
+    let secs = elapsed.as_secs_f64();
+    let ips = if secs > 0.0 { count as f64 / secs } else { 0.0 };
+    eprintln!("Executed {} instructions in {:.2}s ({:.0} ips)",
+        count, secs, ips);
 }
 
 fn run_interactive(emu: &mut rust_imsai_emulator::Imsai8080, max_instructions: u64) {
