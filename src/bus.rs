@@ -15,6 +15,11 @@ use intel8080::Bus;
 use crate::io::IoController;
 use crate::memory::Memory;
 
+/// I/O port for CP/M BIOS re-install trigger (magic port)
+/// When the WBOOT routine writes to this port, the emulator
+/// re-installs the emulator-compatible BIOS after loading system tracks.
+const PORT_BIOS_REINSTALL: u8 = 0xFE;
+
 /// Console data port
 pub const PORT_CONSOLE_DATA: u8 = 0x00;
 /// Console status port
@@ -91,6 +96,13 @@ impl Bus for ImsaiBus {
             PORT_CONSOLE_DATA => {
                 self.io.video.write_char(value);
                 self.io.video.render();
+            }
+            PORT_BIOS_REINSTALL => {
+                // Magic port: WBOOT signals that system tracks have been
+                // reloaded from disk. Re-install our emulator-compatible BIOS
+                // because the loaded data overwrites our patches with hardware-
+                // specific code that won't work with our emulator.
+                crate::CpmBios::install(self);
             }
             p if (TARBELL_BASE..TARBELL_BASE + TARBELL_COUNT).contains(&p) => {
                 self.io.tarbell.io_out(p, value);
