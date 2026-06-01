@@ -416,6 +416,17 @@ impl Uart8251 {
         self.rx_enabled
     }
 
+    /// Directly inject a byte into the RX data register.
+    ///
+    /// This bypasses the UART's keyboard input mechanism and directly
+    /// sets the RX data byte and RxRDY flag. Used when the host
+    /// terminal provides input through the SerialCard's keyboard buffer
+    /// rather than the UART's own Keyboard connection.
+    pub fn inject_rx_byte(&mut self, value: u8) {
+        self.rx_data = Some(value);
+        self.status |= STATUS_RX_READY;
+    }
+
     /// Get the mode configuration (for diagnostics).
     pub fn baud_divisor(&self) -> BaudDivisor {
         self.baud_divisor

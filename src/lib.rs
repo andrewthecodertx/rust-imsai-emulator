@@ -11,10 +11,10 @@
 
 #![warn(missing_docs)]
 
+/// S-100 bus card implementations
+pub mod cards;
 /// Chip-level models (8251A UART, FD1771 FDC)
 pub mod chips;
-/// S-100 bus card implementations
-pub mod card;
 /// CP/M 2.2 BIOS implementation (17-call BIOS with Tarbell controller)
 pub mod bios;
 /// S-100 system bus
@@ -35,10 +35,13 @@ pub mod system;
 // Re-export the main components
 pub use bios::Bios;
 pub use bus::ImsaiBus;
-pub use card::{Card, ConsoleCard, MemoryCard, TarbellCard};
+pub use cards::{Card, MemoryCard, SerialCard, TarbellCard};
 pub use chips::Fd1771;
 pub use chips::Uart8251;
 pub use disk::DiskImage;
 pub use emulator::Imsai8080;
-pub use io::TarbellController;
+pub use io::Keyboard;
+pub use io::VideoDisplay;
 pub use memory::Memory;
+// Legacy re-exports for backward compatibility
+pub use io::TarbellController;

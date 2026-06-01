@@ -1,4 +1,4 @@
-//! S-100 bus implementation for the IMSAI 8080 emulator
+//! S-100 system bus implementation for the IMSAI 8080 emulator
 //!
 //! The S-100 bus is a passive backplane. Cards plug in and communicate
 //! via address lines, data lines, and control signals. The bus dispatches
@@ -6,11 +6,11 @@
 //!
 //! Default card configuration (matching a real IMSAI 8080):
 //! - MemoryCard: 64K RAM (full address space)
-//! - ConsoleCard: keyboard + video (ports 0x00-0x01)
-//! - TarbellCard: floppy disk controller (ports 0x48-0x4B)
+//! - SerialCard: IMSAI SIO-2 (2x 8251A UART, ports 0x00-0x03)
+//! - TarbellCard: floppy disk controller (FD1771, ports 0x48-0x4B)
 
 use intel8080::Bus;
-use crate::card::{Card, ConsoleCard, MemoryCard, TarbellCard};
+use crate::cards::{Card, MemoryCard, SerialCard, TarbellCard};
 
 /// The S-100 system bus: a passive backplane connecting CPU and cards.
 pub struct ImsaiBus {
@@ -18,11 +18,12 @@ pub struct ImsaiBus {
 }
 
 impl ImsaiBus {
-    /// Create a new bus with the standard IMSAI card set.
+    /// Create a new bus with the standard IMSAI card set:
+    /// MemoryCard, SerialCard, and TarbellCard.
     pub fn new() -> Self {
         let mut bus = Self { cards: Vec::new() };
         bus.insert_card(Box::new(MemoryCard::new()));
-        bus.insert_card(Box::new(ConsoleCard::new()));
+        bus.insert_card(Box::new(SerialCard::new()));
         bus.insert_card(Box::new(TarbellCard::new()));
         bus
     }
@@ -59,9 +60,16 @@ impl ImsaiBus {
         }
     }
 
-    /// Get a mutable reference to the console card.
-    pub fn console(&mut self) -> &mut ConsoleCard {
-        self.card_mut::<ConsoleCard>().expect("Console card not installed")
+    /// Get a mutable reference to the serial card.
+    /// This is the primary interface for console I/O.
+    pub fn serial(&mut self) -> &mut SerialCard {
+        self.card_mut::<SerialCard>().expect("Serial card not installed")
+    }
+
+    /// Convenience alias for serial(). Used by code that thinks in
+    /// terms of "the console".
+    pub fn console(&mut self) -> &mut SerialCard {
+        self.serial()
     }
 
     /// Get a mutable reference to the Tarbell disk card.

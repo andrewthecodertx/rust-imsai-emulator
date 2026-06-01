@@ -60,7 +60,7 @@ fn main() {
     // Pre-load keyboard with --cmd text (convert escape sequences)
     if let Some(ref cmd) = cmd_text {
         let input = cmd.replace("\\r", "\r").replace("\\n", "\n");
-        emu.bus.console().keyboard.type_text(&input);
+        emu.bus.console().type_text(&input);
     }
 
     if step_trace {
@@ -246,7 +246,7 @@ fn run_diag(emu: &mut rust_imsai_emulator::Imsai8080, max: u64) {
     println!("0x0000: {:02X} {:02X} {:02X}", emu.bus.mem_read(0), emu.bus.mem_read(1), emu.bus.mem_read(2));
     println!("0x0005: {:02X} {:02X} {:02X}", emu.bus.mem_read(5), emu.bus.mem_read(6), emu.bus.mem_read(7));
 
-    let display = emu.bus.console().video.get_display_string();
+    let display = emu.bus.console().video().get_display_string();
     if !display.trim().is_empty() && display.trim().chars().any(|c| c != ' ') {
         println!("\nDisplay:\n{}", display);
     } else {
@@ -265,7 +265,7 @@ fn run_terminal(emu: &mut rust_imsai_emulator::Imsai8080) {
     }
 
     // Disable auto-rendering of video display (we handle output directly)
-    emu.bus.console().video.auto_render = false;
+    emu.bus.console().set_auto_render(false);
 
     let mut stdout = io::stdout();
     stdout.execute(EnterAlternateScreen).expect("Failed to enter alternate screen");
@@ -326,7 +326,7 @@ fn run_terminal(emu: &mut rust_imsai_emulator::Imsai8080) {
                         match key_event {
                             KeyEvent { code: KeyCode::Esc, .. } => {
                                 // Escape key: send ESC (0x1B) to CP/M
-                                emu.bus.console().keyboard.type_text("\x1B");
+                                emu.bus.console().type_text("\x1B");
                                 got_key = true;
                             }
                             KeyEvent { code: KeyCode::Char(']'), modifiers: KeyModifiers::CONTROL, .. } => {
@@ -343,7 +343,7 @@ fn run_terminal(emu: &mut rust_imsai_emulator::Imsai8080) {
                                 let ctrl_ch = (ch as u8) & 0x1F;
                                 if ctrl_ch != 0 {
                                     let buf = [ctrl_ch];
-                                    emu.bus.console().keyboard.type_text(&String::from_utf8_lossy(&buf));
+                                    emu.bus.console().type_text(&String::from_utf8_lossy(&buf));
                                     got_key = true;
                                 }
                             }
@@ -355,23 +355,23 @@ fn run_terminal(emu: &mut rust_imsai_emulator::Imsai8080) {
                                     ch.to_ascii_uppercase() as u8
                                 };
                                 let buf = [byte];
-                                emu.bus.console().keyboard.type_text(&String::from_utf8_lossy(&buf));
+                                emu.bus.console().type_text(&String::from_utf8_lossy(&buf));
                                 got_key = true;
                             }
                             KeyEvent { code: KeyCode::Enter, .. } => {
-                                emu.bus.console().keyboard.type_text("\r");
+                                emu.bus.console().type_text("\r");
                                 got_key = true;
                             }
                             KeyEvent { code: KeyCode::Backspace, .. } => {
-                                emu.bus.console().keyboard.type_text("\x7F");
+                                emu.bus.console().type_text("\x7F");
                                 got_key = true;
                             }
                             KeyEvent { code: KeyCode::Delete, .. } => {
-                                emu.bus.console().keyboard.type_text("\x7F");
+                                emu.bus.console().type_text("\x7F");
                                 got_key = true;
                             }
                             KeyEvent { code: KeyCode::Tab, .. } => {
-                                emu.bus.console().keyboard.type_text("\t");
+                                emu.bus.console().type_text("\t");
                                 got_key = true;
                             }
                             _ => {} // Ignore other key events
@@ -393,7 +393,7 @@ fn run_terminal(emu: &mut rust_imsai_emulator::Imsai8080) {
         // If no key was pressed and the keyboard buffer is empty,
         // we're likely in the CONIN spin loop. Sleep briefly to
         // avoid burning 100% CPU.
-        if !got_key && !emu.bus.console().keyboard.is_char_ready() {
+        if !got_key && !emu.bus.console().is_key_ready() {
             idle_count += 1;
             if idle_count > 5 {
                 // After 5 idle batches, start sleeping to reduce CPU usage.
@@ -438,7 +438,7 @@ fn run_interactive(emu: &mut rust_imsai_emulator::Imsai8080, max_instructions: u
     }
 
     println!("\nStopped at PC=0x{:04X} after {} instructions", emu.cpu.pc, count);
-    let display = emu.bus.console().video.get_display_string();
+    let display = emu.bus.console().video().get_display_string();
     if !display.trim().is_empty() && display.trim().chars().any(|c| c != ' ') {
         println!("\nDisplay:\n{}", display);
     } else {
@@ -477,7 +477,7 @@ fn run_trace(emu: &mut rust_imsai_emulator::Imsai8080, max: u64) {
         }
     }
     println!("Stopped at PC=0x{:04X} after {} instructions", emu.cpu.pc, count);
-    let display = emu.bus.console().video.get_display_string();
+    let display = emu.bus.console().video().get_display_string();
     println!("\nDisplay:\n{}", display);
 }
 fn run_pc_trace(emu: &mut rust_imsai_emulator::Imsai8080, max: u64) {
@@ -932,7 +932,7 @@ fn run_hybrid_test(emu: &mut rust_imsai_emulator::Imsai8080, max_instructions: u
         }
 
         // Flush display every flush_interval steps (or if HLT)
-        let display = emu.bus.console().video.get_display_string();
+        let display = emu.bus.console().video().get_display_string();
         for c in display.chars().filter(|c| *c != ' ') {
             video_chars.push(c);
             ever_saw_console_out = true;
@@ -995,12 +995,12 @@ fn run_hybrid_test(emu: &mut rust_imsai_emulator::Imsai8080, max_instructions: u
 /// No terminal raw mode needed, just pure batch execution with I/O interception.
 fn run_scripted(emu: &mut rust_imsai_emulator::Imsai8080, cmd: Option<&str>, max_instructions: u64) {
     // Disable video rendering (we capture console output directly)
-    emu.bus.console().video.auto_render = false;
+    emu.bus.console().set_auto_render(false);
 
     // Pre-load keyboard with command text
     if let Some(cmd_text) = cmd {
         let input = cmd_text.replace("\\r", "\r").replace("\\n", "\n");
-        emu.bus.console().keyboard.type_text(&input);
+        emu.bus.console().type_text(&input);
     }
 
     let mut output = String::new();

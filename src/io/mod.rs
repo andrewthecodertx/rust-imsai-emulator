@@ -1,8 +1,10 @@
 //! I/O subsystem components for the IMSAI 8080 emulator
 //!
-//! Individual I/O components are composed into S-100 cards (see `card.rs`).
-//! The keyboard, video display, and Tarbell controller are each standalone
-//! modules that are combined into `ConsoleCard` and `TarbellCard`.
+//! The keyboard and video display modules are standalone I/O components
+//! that are composed into S-100 cards (see `cards/` module).
+//!
+//! The `TarbellController` module is retained for backward compatibility
+//! but is superseded by the chip-level `Fd1771` model (see `chips/fd1771.rs`).
 
 pub mod keyboard;
 pub mod tarbell;
