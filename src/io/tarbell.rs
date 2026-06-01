@@ -480,6 +480,16 @@ impl TarbellController {
     pub fn has_disk(&self, drive: usize) -> bool {
         drive < 4 && self.drives[drive].is_some()
     }
+
+    /// Get the current track register value
+    pub fn current_track(&self) -> u8 {
+        self.track_register
+    }
+
+    /// Get the current sector register value
+    pub fn current_sector(&self) -> u8 {
+        self.sector_register
+    }
 }
 
 #[cfg(test)]

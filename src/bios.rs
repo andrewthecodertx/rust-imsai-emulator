@@ -56,7 +56,7 @@ const CUR_DMA: u16 = 0xF9FB;
 const CUR_DISK: u16 = 0xF9FD;
 
 /// Disk Parameter Header (DPH) and buffer addresses.
-/// These are placed after the BIOS routines (0xFB20+).
+/// These are placed after the BIOS routines (which end around 0xFB24).
 /// The DPH is a 16-byte structure that SELDSK returns to BDOS.
 /// The BDOS uses offsets 2-7 as scratch workspace (three 16-bit words),
 /// so DIRBUF must be at offset 8, not offset 6.
@@ -70,10 +70,10 @@ const CUR_DISK: u16 = 0xF9FD;
 /// offset 10-11: DPB (disk parameter block address)
 /// offset 12-13: CSV (directory check vector address)
 /// offset 14-15: ALV (allocation vector address)
-const DPH_ADDR: u16 = 0xFB20;
-const DIRBUF_ADDR: u16 = 0xFB30; // 128 bytes for directory buffer
-const CSV_ADDR: u16 = 0xFBB0;    // 32 bytes for directory check vector
-const ALV_ADDR: u16 = 0xFBD0;    // 48 bytes for allocation vector
+const DPH_ADDR: u16 = 0xFB30;    // moved from 0xFB20 to avoid BIOS code overlap
+const DIRBUF_ADDR: u16 = 0xFB40; // 128 bytes for directory buffer
+const CSV_ADDR: u16 = 0xFBC0;    // 32 bytes for directory check vector
+const ALV_ADDR: u16 = 0xFBE0;    // 48 bytes for allocation vector
 
 /// Simple code builder that tracks the current absolute address.
 struct CodeBuilder {
@@ -305,11 +305,12 @@ impl Bios {
         let read_loop = b.here();
         b.emit_in(TARB_STAT);
         b.emit_ani(0x02); // DRQ
-        // Forward reference: skip error path (ANI+JNZ+MVI+RET = 2+3+2+1=8 bytes)
-        // Plus the JNZ itself (3 bytes)
-        let read_got_drq = b.here() + 3 + 2 + 3 + 2 + 1;
+        // Forward reference: calc skip target
+        // After JNZ(3): IN(2) + ANI(2) + JNZ(3) + MVI(2) + RET(1) = 10 bytes
+        let read_got_drq = b.here() + 3 + 2 + 2 + 3 + 2 + 1;
         b.emit_jnz(read_got_drq);
-        // No DRQ: check if still busy
+        // No DRQ: re-read status to check BUSY (previous ANI clobbered A)
+        b.emit_in(TARB_STAT);
         b.emit_ani(0x01); // BUSY
         b.emit_jnz(read_loop);
         // Error: not busy, no DRQ
@@ -339,8 +340,11 @@ impl Bios {
         let write_loop = b.here();
         b.emit_in(TARB_STAT);
         b.emit_ani(0x02); // DRQ
-        let write_got_drq = b.here() + 3 + 2 + 3 + 2 + 1;
+        // Forward reference: after JNZ(3): IN(2) + ANI(2) + JNZ(3) + MVI(2) + RET(1) = 10
+        let write_got_drq = b.here() + 3 + 2 + 2 + 3 + 2 + 1;
         b.emit_jnz(write_got_drq);
+        // No DRQ: re-read status to check BUSY
+        b.emit_in(TARB_STAT);
         b.emit_ani(0x01); // BUSY
         b.emit_jnz(write_loop);
         b.emit_mvi_a(0x01); // error
@@ -417,7 +421,10 @@ impl Bios {
             bus.memory.write(routine_base + i as u16, byte);
         }
 
-        // Patch SECTRAN: replace MVI A,0x00 with MVI H,0x00
+        // ── Write BIOS jump table ──
+        for i in 0..NUM_ENTRIES {
+            write_jmp(bus, BIOS_BASE + (i as u16) * 3, entry_addrs[i]);
+        }
         // The code builder emitted MVI A,0x00 (0x3E 0x00) where it should
         // be MVI H,0x00 (0x26 0x00). Find and patch this sequence.
         let sectran_start = (entry_addrs[16] - routine_base) as usize;

@@ -1,10 +1,12 @@
 # IMSAI 8080 Emulator
 
-A Rust emulator for the IMSAI 8080 that boots and runs CP/M 2.2 with interactive terminal support.
+A Rust emulator for the IMSAI 8080 that boots CP/M 2.2 with a custom BIOS and Tarbell floppy controller.
 
 ## What It Does
 
-Loads a CP/M 2.2 disk image, installs a custom BIOS, and runs the operating system with console output, disk I/O, keyboard input, and the `A>` prompt.
+Emulates the IMSAI 8080 hardware (CPU, memory, Tarbell disk controller, console I/O) and runs a CP/M 2.2 operating system from a disk image. The custom BIOS provides the 17 standard CP/M entry points, and the Tarbell FD1771 controller handles disk reads and writes.
+
+**Current status**: Boots CP/M 2.2 to the `A>` prompt. Directory listing partially works. Program execution (.COM files) hit "Bad Sector" errors due to incompatibility between the z80pack BDOS binary and the Tarbell controller's sector numbering. A CP/M 2.2 system image assembled for the Tarbell controller is needed.
 
 ## Hardware Emulated
 
@@ -16,29 +18,29 @@ Loads a CP/M 2.2 disk image, installs a custom BIOS, and runs the operating syst
 
 ## CP/M 2.2 Memory Map
 
-| Address  | Contents                              |
-|----------|----------------------------------------|
-| 0x0000   | Vectors (JMP WBOOT, JMP BDOS)         |
-| 0x0100   | TPA (Transient Program Area)           |
-| 0xE400   | CCP (from z80pack disk image)          |
-| 0xEC00   | BDOS (from z80pack disk image)         |
-| 0xF000   | BDOS data area                         |
-| 0xFA00   | Custom BIOS (17-entry jump table)     |
-| 0xFB20   | DPH + DIRBUF + CSV + ALV              |
+| Address   | Contents                              |
+|-----------|---------------------------------------|
+| 0x0000    | Vectors (JMP WBOOT, JMP BDOS)        |
+| 0x0100    | TPA (Transient Program Area)           |
+| 0xE400    | CCP (loaded from disk image)           |
+| 0xEC00    | BDOS (loaded from disk image)           |
+| 0xF000    | BDOS data area                         |
+| 0xFA00    | Custom BIOS (17-entry jump table)      |
+| 0xFB30    | DPH + DIRBUF + CSV + ALV               |
 
 ## Quick Start
 
 ```bash
 cargo build --release
-./target/release/rust-imsai-emulator disk_images/cpm22-z80pack.dsk
+./target/release/rust-imsai-emulator <disk_image.img>
 ```
 
-This boots CP/M 2.2 in interactive terminal mode. You can type commands at the `A>` prompt.
+Requires a CP/M 2.2 disk image (256,256 bytes, 77 tracks x 26 sectors x 128 bytes). The system tracks must contain CCP+BDOS assembled for addresses 0xE400/0xEC06 with the Tarbell controller ports.
 
 ## Command-Line Options
 
 ```
-rust-imsai-emulator [DISK_IMAGE] [OPTIONS]
+rust-imsai-emulator <disk_image.img> [OPTIONS]
 
 Options:
   (default)         Interactive terminal mode with keyboard input
@@ -48,7 +50,8 @@ Options:
   --diag, -d         Diagnostic mode (I/O log + region tracking)
   --step, -s         Step trace (first 500 instructions)
   --pctrace, -p      PC ring-buffer trace (last 8K instructions)
-  --hybrid           Full-speed run with periodic display flush
+  --script           Scripted mode (captures console output)
+  --cmd "text"       Pre-load keyboard input for scripted testing
 ```
 
 ## Terminal Mode Controls
@@ -62,40 +65,17 @@ Options:
 | Ctrl+key     | Sends control character (Ctrl+C = 0x03)   |
 | Ctrl+]       | Exit emulator                              |
 
-## Disk Images
-
-Use any 256,256-byte z80pack-format CP/M 2.2 8" SSSD image (77 tracks x 26 sectors x 128 bytes). The `disk_images/` directory contains test images.
-
 ## BIOS
 
-The custom BIOS at 0xFA00 provides all 17 CP/M 2.2 entry points:
-
-| #  | Entry    | Function                         |
-|----|----------|----------------------------------|
-| 0  | BOOT     | Cold start (outputs debug 0xFE) |
-| 1  | WBOOT     | Warm start (reinitializes, jumps to CCP) |
-| 2  | CONST    | Console status (checks port 0x01) |
-| 3  | CONIN    | Console input (blocking, reads port 0x00) |
-| 4  | CONOUT   | Console output (port 0x00)       |
-| 5  | LIST     | List device (no-op)              |
-| 6  | PUNCH    | Punch device (console)           |
-| 7  | READER   | Reader (returns EOF)              |
-| 8  | HOME     | Seek track 0                     |
-| 9  | SELDSK   | Select disk, return DPH pointer   |
-| 10 | SETTRK   | Set track number                 |
-| 11 | SETSEC   | Set sector number                |
-| 12 | SETDMA   | Set DMA address                  |
-| 13 | READ     | Read sector into DMA buffer      |
-| 14 | WRITE    | Write sector from DMA buffer      |
-| 15 | LISTST   | List status (always ready)       |
-| 16 | SECTRAN  | Sector translation with skew     |
+The custom BIOS at 0xFA00 provides all 17 CP/M 2.2 entry points using Tarbell controller ports 0x48-0x4B and console ports 0x00-0x01. Disk parameter block matches the 8" SSSD format: 26 sectors/track, 1024-byte allocation blocks, 2 reserved tracks.
 
 ## Known Limitations
 
 - Only drive A: is functional
+- .COM program execution fails with "Bad Sector" due to BDOS sector numbering incompatibility
 - Write operations to disk are implemented but untested
 - Only 8" SSSD floppy format (77 tracks, 26 sectors, 128 bytes/sector)
-- Emulator runs at full speed without cycle-accurate timing
+- No cycle-accurate timing
 
 ## License
 

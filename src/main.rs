@@ -1,5 +1,4 @@
 use std::env;
-use std::path::Path;
 use std::io::{self, Write};
 use std::time::Instant;
 
@@ -9,6 +8,9 @@ use crossterm::{
     ExecutableCommand,
 };
 
+/// CCP base address for 64K CP/M 2.2 system
+const CPMB: u16 = 0xE400;
+
 fn main() {
     let args: Vec<String> = env::args().collect();
     let trace = args.contains(&"--trace".to_string()) || args.contains(&"-t".to_string());
@@ -16,33 +18,29 @@ fn main() {
     let diag = args.contains(&"--diag".to_string()) || args.contains(&"-d".to_string());
     let step_trace = args.contains(&"--step".to_string()) || args.contains(&"-s".to_string());
     let pc_trace = args.contains(&"--pctrace".to_string()) || args.contains(&"-p".to_string());
-    let _hello = args.contains(&"--hello".to_string()) || args.contains(&"--hello-test".to_string());
     let batch_mode = args.contains(&"--batch".to_string()) || args.contains(&"-b".to_string());
-    let disk_path = args.iter().skip(1).find(|a| !a.starts_with('-')).map(|s| s.as_str());
+    // --cmd "DIR\r" pre-loads keyboard input for scripted testing
+    let cmd_text = args.iter().position(|a| a == "--cmd")
+        .and_then(|i| args.get(i + 1))
+        .map(|s| s.clone());
+    let disk_path = if let Some(cmd_idx) = args.iter().position(|a| a == "--cmd") {
+        args.iter().skip(1)
+            .enumerate()
+            .filter(|(i, a)| *i != cmd_idx && *i != cmd_idx + 1 && !a.starts_with('-'))
+            .map(|(_, a)| a.as_str())
+            .next()
+    } else {
+        args.iter().skip(1).find(|a| !a.starts_with('-')).map(|s| s.as_str())
+    };
 
     let mut emu = rust_imsai_emulator::Imsai8080::new();
 
     let disk_file = if let Some(path) = disk_path {
         path.to_string()
     } else {
-        let defaults = [
-            "disk_images/cpm22-z80pack.dsk",
-            "disk_images/cpm22-boot.img",
-        ];
-        let mut found = None;
-        for default in defaults {
-            if Path::new(default).exists() {
-                found = Some(default);
-                break;
-            }
-        }
-        match found {
-            Some(path) => path.to_string(),
-            None => {
-                eprintln!("Usage: {} [disk_image.img] [--trace] [--vtrace] [--diag] [--step] [--pctrace] [--hello] [--batch]", args.get(0).unwrap());
-                return;
-            }
-        }
+        eprintln!("Usage: {} <disk_image.img> [options]", args.get(0).unwrap());
+        eprintln!("Options: --batch  --trace  --vtrace  --diag  --step  --pctrace  --script  --cmd \"text\"");
+        return;
     };
 
     match emu.bus.io.tarbell.insert_disk(0, &disk_file) {
@@ -53,21 +51,16 @@ fn main() {
         }
     }
 
-    // Only run boot_cpm for normal CP/M mode (not hello/console-test)
-    if !args.contains(&"--hello".to_string()) && !args.contains(&"--hello-test".to_string()) &&
-       !args.contains(&"--console-test".to_string()) && !args.contains(&"--ctest".to_string()) {
-        boot_cpm(&mut emu);
+    // Boot CP/M: load system tracks and install our BIOS
+    boot_cpm(&mut emu);
+
+    // Pre-load keyboard with --cmd text (convert escape sequences)
+    if let Some(ref cmd) = cmd_text {
+        let input = cmd.replace("\\r", "\r").replace("\\n", "\n");
+        emu.bus.io.keyboard.type_text(&input);
     }
 
-    if args.contains(&"--hybrid".to_string()) || args.contains(&"--hybrid-test".to_string()) {
-        run_hybrid_test(&mut emu, 1_000_000);
-    } else if args.contains(&"--hello".to_string()) || args.contains(&"--hello-test".to_string()) {
-        run_hello(&mut emu);
-        run_hybrid_test(&mut emu, 100000);
-    } else if args.contains(&"--console-test".to_string()) || args.contains(&"--ctest".to_string()) {
-        console_test(&mut emu);
-        run_hybrid_test(&mut emu, 100000);
-    } else if step_trace {
+    if step_trace {
         run_step_trace(&mut emu, 500);
     } else if diag {
         run_diag(&mut emu, 50000);
@@ -77,120 +70,27 @@ fn main() {
         run_verbose_trace(&mut emu, 200000);
     } else if trace {
         run_trace(&mut emu, 50000);
+    } else if args.contains(&"--script".to_string()) {
+        run_scripted(&mut emu, cmd_text.as_deref(), 100_000_000);
     } else if batch_mode {
         run_interactive(&mut emu, 50_000_000);
     } else {
         run_terminal(&mut emu);
     }
 }
-
-/// CP/M 2.2 64K system memory layout
-///
-/// | Address   | Contents                                    |
-/// |-----------|---------------------------------------------|
-/// | 0x0000    | JMP WBOOT (0xFA03)                          |
-/// | 0x0003    | IOBYTE                                       |
-/// | 0x0004    | Current drive                                |
-/// | 0x0005    | JMP BDOS (0xEC06)                            |
-/// | 0x0100    | TPA start                                    |
-/// | 0xE400    | CCP (Command Control Program)                |
-/// | 0xEC06    | BDOS                                         |
-/// | 0xFA00    | BIOS (jump table + routines)                 |
-///
-/// We use the z80pack cpmsim 64K CP/M 2.2 disk image which already
-/// has CCP and BDOS assembled for these addresses. No relocation
-/// is needed — we load the system tracks verbatim into memory and
-/// install our own BIOS at 0xFA00.
-const CPMB: u16 = 0xE400;
-
-fn run_hello(emu: &mut rust_imsai_emulator::Imsai8080) {
-    // Load the hello image
-    let disk_path = "disk_images/cpm22.img";
-    if !Path::new(disk_path).exists() {
-        eprintln!("Error: {} not found", disk_path);
-        return;
-    }
-
-    match emu.bus.io.tarbell.insert_disk(0, disk_path) {
-        Ok(()) => println!("Loaded CP/M 2.2 disk"),
-        Err(e) => {
-            eprintln!("Error loading disk '{}': {}", disk_path, e);
-            return;
-        }
-    }
-
-    // Just load boot sector and run - let the boot loader do the work
-    // Load track 0, sector 1 (boot sector) to 0x0080
-    match emu.bus.io.tarbell.get_disk(0) {
-        Some(disk) => {
-            match disk.read_sector(0, 1) {
-                Ok(data) => {
-                    for j in 0..data.len() {
-                        emu.bus.memory.write(0x0080 + j as u16, data[j]);
-                    }
-                    println!("Loaded boot sector to 0x0080");
-                }
-                Err(e) => {
-                    eprintln!("Error reading boot sector: {}", e);
-                    return;
-                }
-            }
-        }
-        None => {
-            eprintln!("No disk in drive 0");
-            return;
-        }
-    }
-
-    // Start execution at boot loader (0x0080)
-    emu.cpu.pc = 0x0080;
-    emu.cpu.sp = 0x0000;
-}
-
-fn console_test(emu: &mut rust_imsai_emulator::Imsai8080) {
-    // Write a tiny test program to 0x0100 that outputs 'X' to console
-    // Program:
-    //   0x0100: MVI A, 'X'    (0x3E, 0x58)
-    //   0x0102: OUT 0x00      (0xD3, 0x00)
-    //   0x0104: JMP 0x0100    (0xC3, 0x00, 0x01)
-    // This loops infinitely, outputting 'X' repeatedly.
-
-    let test_program: [u8; 7] = [
-        0x3E, 0x58, // MVI A, 'X'
-        0xD3, 0x00, // OUT 0x00
-        0xC3, 0x00, 0x01, // JMP 0x0100
-    ];
-
-    for (i, byte) in test_program.iter().enumerate() {
-        emu.bus.memory.write(0x0100 + i as u16, *byte);
-    }
-
-    // Set up stack and start at 0x0100
-    emu.cpu.sp = 0x0000;
-    emu.cpu.pc = 0x0100;
-
-    println!("Console test: PC=0x{:04X}, executing infinite loop outputting 'X'...", emu.cpu.pc);
-}
-
 fn boot_cpm(emu: &mut rust_imsai_emulator::Imsai8080) {
-    // CP/M 2.2 64K boot: load system tracks from z80pack disk image.
+    // CP/M 2.2 64K boot: load system tracks from disk image.
     //
-    // The z80pack cpmsim CP/M 2.2 disk has CCP+BDOS already assembled
-    // for the 64K layout (CCP=0xE400, BDOS=0xEC06, BIOS=0xFA00).
-    // We load the system tracks verbatim into memory, then install our
-    // own BIOS at 0xFA00 (using Tarbell ports 0x48-0x4B instead of
-    // the z80pack virtual ports 10-16).
-    //
-    // No DRI relocation is needed — the disk image is already a
-    // correct 64K CP/M 2.2 binary image.
+    // The disk image must contain CCP+BDOS assembled for the 64K layout
+    // (CCP=0xE400, BDOS=0xEC06) on its first 2-3 tracks. We load the
+    // system tracks into memory, then install our own BIOS at 0xFA00.
     const BIOS_BASE: u16 = 0xFA00;
-    const _BDOS_ENTRY: u16 = 0xEC06;
 
     let mut mem_addr: u16 = CPMB; // 0xE400
     let mut sectors_loaded: u16 = 0;
 
-    // Track 0 sector 1 = boot sector (for WBOOT reference), skip it
-    // Tracks 0-1, sectors 2+: system data (CCP+BDOS+BIOS on disk)
+    // Load system tracks (tracks 0 through OFF-1) into memory at 0xE400.
+    // Skip track 0 sector 1 (boot sector placeholder).
     for track in 0..2u8 {
         for sector in 1..=26u8 {
             if track == 0 && sector == 1 {
@@ -202,12 +102,10 @@ fn boot_cpm(emu: &mut rust_imsai_emulator::Imsai8080) {
                     match disk.read_sector(track, sector) {
                         Ok(data) => {
                             if mem_addr >= BIOS_BASE {
-                                // Don't overwrite BIOS area
-                                continue;
+                                continue; // don't overwrite BIOS area
                             }
                             let end = mem_addr as usize + data.len();
                             if end > BIOS_BASE as usize {
-                                // Partial write up to BIOS boundary
                                 let avail = BIOS_BASE - mem_addr;
                                 for j in 0..avail as usize {
                                     emu.bus.memory.write(mem_addr + j as u16, data[j]);
@@ -243,9 +141,7 @@ fn boot_cpm(emu: &mut rust_imsai_emulator::Imsai8080) {
     // Install our custom BIOS at 0xFA00.
     rust_imsai_emulator::Bios::install_jump_table(&mut emu.bus);
 
-    // Start at CCP — the CCP cold-start entry at 0xE400.
-    // CCP will initialize itself, set up 0x0000/0x0005, call BIOS BOOT,
-    // which prints the sign-on and enters the command loop.
+    // Start at CCP cold-start entry at 0xE400.
     emu.cpu.pc = CPMB;
     emu.cpu.sp = 0x0000;
 }
@@ -582,11 +478,6 @@ fn run_trace(emu: &mut rust_imsai_emulator::Imsai8080, max: u64) {
     let display = emu.bus.io.video.get_display_string();
     println!("\nDisplay:\n{}", display);
 }
-
-/// PC trace: runs at full speed but keeps a ring buffer of the last N
-/// fully-decoded instructions. Also captures all I/O operations.
-/// Dumps the buffer and I/O log at the end so you can see exactly
-/// what the CPU was doing right before it stopped or got stuck.
 fn run_pc_trace(emu: &mut rust_imsai_emulator::Imsai8080, max: u64) {
     const RING_SIZE: usize = 8192;
     println!("=== PC TRACE ({} instructions, ring={}) ===", max, RING_SIZE);
@@ -985,6 +876,7 @@ fn run_verbose_trace(emu: &mut rust_imsai_emulator::Imsai8080, max: u64) {
 ///
 /// Also serves as a "console output test" — if no OUT to video ports,
 /// the problem is not in BIOS but in the program not running.
+#[allow(dead_code)]
 fn run_hybrid_test(emu: &mut rust_imsai_emulator::Imsai8080, max_instructions: u64) {
     println!("=== HYBRID TEST ({} instructions) ===", max_instructions);
     println!("Running at full speed with periodic flushes...");
@@ -1097,4 +989,85 @@ fn run_hybrid_test(emu: &mut rust_imsai_emulator::Imsai8080, max_instructions: u
     } else {
         println!("\n(no Tarbell 0x48–0x4B OUT detected)");
     }
+}
+/// No terminal raw mode needed, just pure batch execution with I/O interception.
+fn run_scripted(emu: &mut rust_imsai_emulator::Imsai8080, cmd: Option<&str>, max_instructions: u64) {
+    // Disable video rendering (we capture console output directly)
+    emu.bus.io.video.auto_render = false;
+
+    // Pre-load keyboard with command text
+    if let Some(cmd_text) = cmd {
+        let input = cmd_text.replace("\\r", "\r").replace("\\n", "\n");
+        emu.bus.io.keyboard.type_text(&input);
+    }
+
+    let mut output = String::new();
+    let mut count: u64 = 0;
+    let start_time = Instant::now();
+
+    loop {
+        let pc = emu.cpu.pc;
+        let op = emu.bus.memory.read(pc);
+
+        emu.step();
+        count += 1;
+
+        // Capture console output (port 0x00 or 0x7B OUT)
+        if op == 0xD3 {
+            let port = emu.bus.memory.read(pc + 1);
+            if port == 0x00 || port == 0x7B {
+                let ch = emu.cpu.a;
+                if ch == 0x0D {
+                    output.push('\r');
+                } else if ch == 0x0A {
+                    output.push('\n');
+                } else if ch == 0x08 {
+                    output.push_str("\x08 \x08");
+                } else if ch >= 0x20 && ch < 0x7F {
+                    output.push(ch as char);
+                } else if ch < 0x20 && ch != 0x00 {
+                    output.push_str(&format!("[0x{:02X}]", ch));
+                }
+            }
+        }
+
+        // Track disk I/O for debugging: log READ commands
+        if op == 0xD3 {
+            let port = emu.bus.memory.read(pc + 1);
+            if port == 0x48 && emu.cpu.a == 0x80 {
+                let track = emu.bus.io.tarbell.current_track();
+                let sector = emu.bus.io.tarbell.current_sector();
+                eprintln!("DISK READ: track={}, sector={}", track, sector);
+            }
+        }
+
+        if emu.cpu.halted || count >= max_instructions {
+            break;
+        }
+    }
+
+    let elapsed = start_time.elapsed();
+    eprintln!("Executed {} instructions in {:.2}s", count, elapsed.as_secs_f64());
+    eprintln!("Final PC: 0x{:04X}", emu.cpu.pc);
+    eprintln!();
+    println!("=== CONSOLE OUTPUT ===");
+    println!("{}", output);
+    println!("=== END OUTPUT ===");
+
+    // Quick memory dumps for debugging
+    eprintln!("\n=== KEY MEMORY AREAS ===");
+    dump_memory_eprint(&emu, 0x0000, 8, "Vectors");
+    dump_memory_eprint(&emu, 0x0005, 3, "BDOS JMP");
+    dump_memory_eprint(&emu, 0x0100, 32, "TPA (0x0100)");
+}
+
+fn dump_memory_eprint(emu: &rust_imsai_emulator::Imsai8080, start: u16, len: usize, label: &str) {
+    eprint!("0x{:04X}: {} = ", start, label);
+    for i in 0..len {
+        if i > 0 && i % 16 == 0 {
+            eprint!("\n        ");
+        }
+        eprint!("{:02X} ", emu.bus.memory.read(start + i as u16));
+    }
+    eprintln!();
 }
