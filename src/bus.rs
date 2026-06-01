@@ -15,6 +15,7 @@
 use intel8080::Bus;
 use crate::card::{Card, ConsoleCard, TarbellCard};
 use crate::memory::Memory;
+use std::any::Any;
 
 /// The S-100 system bus connecting CPU, memory, and I/O cards.
 pub struct ImsaiBus {
@@ -25,12 +26,17 @@ pub struct ImsaiBus {
 }
 
 impl ImsaiBus {
-    /// Create a new bus with empty memory and no cards.
+    /// Create a new bus with 64K memory and the standard IMSAI card set:
+    /// - ConsoleCard (keyboard + video, ports 0x00-0x01)
+    /// - TarbellCard (floppy controller, ports 0x48-0x4B)
     pub fn new() -> Self {
-        Self {
+        let mut bus = Self {
             memory: Memory::new(),
             cards: Vec::new(),
-        }
+        };
+        bus.insert_card(Box::new(ConsoleCard::new()));
+        bus.insert_card(Box::new(TarbellCard::new()));
+        bus
     }
 
     /// Insert an S-100 card into the bus.
