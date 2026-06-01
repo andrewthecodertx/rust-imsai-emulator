@@ -169,8 +169,8 @@ impl Bios {
     pub fn install_jump_table(bus: &mut ImsaiBus) {
         // ── System vectors ──
         write_jmp(bus, 0x0000, BIOS_BASE + 3); // JMP WBOOT (jump table entry 1)
-        bus.memory.write(0x0003, 0x00); // IOBYTE
-        bus.memory.write(0x0004, 0x00); // Current drive = A
+        bus.memory().write(0x0003, 0x00); // IOBYTE
+        bus.memory().write(0x0004, 0x00); // Current drive = A
         write_jmp(bus, 0x0005, BDOS_ENTRY);
 
         // ── Build BIOS routines ──
@@ -418,7 +418,7 @@ impl Bios {
 
         // ── Write code to memory ──
         for (i, &byte) in b.code.iter().enumerate() {
-            bus.memory.write(routine_base + i as u16, byte);
+            bus.memory().write(routine_base + i as u16, byte);
         }
 
         // ── Write BIOS jump table ──
@@ -431,7 +431,7 @@ impl Bios {
         let mut patched = false;
         for i in sectran_start..b.code.len() - 2 {
             if b.code[i] == 0x6F && b.code[i + 1] == 0x3E && b.code[i + 2] == 0x00 {
-                bus.memory.write(routine_base + i as u16 + 1, 0x26);
+                bus.memory().write(routine_base + i as u16 + 1, 0x26);
                 patched = true;
                 break;
             }
@@ -449,7 +449,7 @@ impl Bios {
         let dpb = crate::dpb::DiskParameterBlock::tarbell_standard();
         let dpb_bytes = dpb.to_bytes();
         for (i, &byte) in dpb_bytes.iter().enumerate() {
-            bus.memory.write(DPB_ADDR + i as u16, byte);
+            bus.memory().write(DPB_ADDR + i as u16, byte);
         }
 
         // ── Install skew table ──
@@ -458,7 +458,7 @@ impl Bios {
             2, 8, 14, 20, 26, 4, 10, 16, 22, 6, 12, 18, 24
         ];
         for (i, &byte) in skew.iter().enumerate() {
-            bus.memory.write(SKEW_ADDR + i as u16, byte);
+            bus.memory().write(SKEW_ADDR + i as u16, byte);
         }
 
         // ── Install Disk Parameter Header (DPH) ──
@@ -480,31 +480,31 @@ impl Bios {
         // CSV: 32 bytes, zeroed (directory checksum area)
         // ALV: 48 bytes, zeroed (all blocks initially free)
         for i in 0..128u16 {
-            bus.memory.write(DIRBUF_ADDR + i, 0x00);
+            bus.memory().write(DIRBUF_ADDR + i, 0x00);
         }
         for i in 0..32u16 {
-            bus.memory.write(CSV_ADDR + i, 0x00);
+            bus.memory().write(CSV_ADDR + i, 0x00);
         }
         for i in 0..48u16 {
-            bus.memory.write(ALV_ADDR + i, 0x00);
+            bus.memory().write(ALV_ADDR + i, 0x00);
         }
 
         // ── Initialize scratch variables ──
-        bus.memory.write(CUR_TRACK, 0);
-        bus.memory.write(CUR_SECTOR, 1);
-        bus.memory.write(CUR_DISK, 0);
+        bus.memory().write(CUR_TRACK, 0);
+        bus.memory().write(CUR_SECTOR, 1);
+        bus.memory().write(CUR_DISK, 0);
         write_u16(bus, CUR_DMA, 0x0080);
     }
 }
 
 fn write_jmp(bus: &mut ImsaiBus, addr: u16, target: u16) {
-    bus.memory.write(addr, 0xC3);
+    bus.memory().write(addr, 0xC3);
     write_u16(bus, addr + 1, target);
 }
 
 fn write_u16(bus: &mut ImsaiBus, addr: u16, val: u16) {
-    bus.memory.write(addr, val as u8);
-    bus.memory.write(addr + 1, (val >> 8) as u8);
+    bus.memory().write(addr, val as u8);
+    bus.memory().write(addr + 1, (val >> 8) as u8);
 }
 
 #[cfg(test)]
@@ -518,19 +518,19 @@ mod tests {
         Bios::install_jump_table(&mut bus);
 
         // 0x0000: JMP WBOOT
-        assert_eq!(bus.memory.read(0x0000), 0xC3);
-        let wboot_target = bus.memory.read(0x0001) as u16 | (bus.memory.read(0x0002) as u16) << 8;
+        assert_eq!(bus.memory().read(0x0000), 0xC3);
+        let wboot_target = bus.memory().read(0x0001) as u16 | (bus.memory().read(0x0002) as u16) << 8;
         // WBOOT is entry 1 in jump table, so jump from 0x0000 goes to WBOOT routine
         assert!(wboot_target >= 0xFA00, "WBOOT target should be in BIOS area, got 0x{:04X}", wboot_target);
 
         // 0x0005: JMP BDOS
-        assert_eq!(bus.memory.read(0x0005), 0xC3);
-        let bdos_target = bus.memory.read(0x0006) as u16 | (bus.memory.read(0x0007) as u16) << 8;
+        assert_eq!(bus.memory().read(0x0005), 0xC3);
+        let bdos_target = bus.memory().read(0x0006) as u16 | (bus.memory().read(0x0007) as u16) << 8;
         assert_eq!(bdos_target, BDOS_ENTRY, "BDOS vector should point to 0x{:04X}, got 0x{:04X}", BDOS_ENTRY, bdos_target);
 
         // IOBYTE and current drive
-        assert_eq!(bus.memory.read(0x0003), 0x00);
-        assert_eq!(bus.memory.read(0x0004), 0x00);
+        assert_eq!(bus.memory().read(0x0003), 0x00);
+        assert_eq!(bus.memory().read(0x0004), 0x00);
     }
 
     #[test]
@@ -541,10 +541,10 @@ mod tests {
         // All 17 entries should be JMP instructions targeting BIOS routine area
         for i in 0..NUM_ENTRIES {
             let addr = BIOS_BASE + (i as u16) * 3;
-            assert_eq!(bus.memory.read(addr), 0xC3,
-                "BIOS entry {} at 0x{:04X} should be JMP, got 0x{:02X}", i, addr, bus.memory.read(addr));
-            let target = bus.memory.read(addr + 1) as u16
-                | (bus.memory.read(addr + 2) as u16) << 8;
+            assert_eq!(bus.memory().read(addr), 0xC3,
+                "BIOS entry {} at 0x{:04X} should be JMP, got 0x{:02X}", i, addr, bus.memory().read(addr));
+            let target = bus.memory().read(addr + 1) as u16
+                | (bus.memory().read(addr + 2) as u16) << 8;
             assert!(target >= BIOS_BASE && target < 0xFF00,
                 "BIOS entry {} target 0x{:04X} out of range", i, target);
         }
@@ -557,11 +557,11 @@ mod tests {
 
         // Entry 1 (WBOOT) routine should start with LXI SP,0x0000
         let wboot_jmp = BIOS_BASE + 3; // jump table entry 1
-        let wboot_target = bus.memory.read(wboot_jmp + 1) as u16
-            | (bus.memory.read(wboot_jmp + 2) as u16) << 8;
+        let wboot_target = bus.memory().read(wboot_jmp + 1) as u16
+            | (bus.memory().read(wboot_jmp + 2) as u16) << 8;
         // WBOOT should start with LXI SP (0x31)
-        assert_eq!(bus.memory.read(wboot_target), 0x31,
-            "WBOOT should start with LXI SP, got 0x{:02X}", bus.memory.read(wboot_target));
+        assert_eq!(bus.memory().read(wboot_target), 0x31,
+            "WBOOT should start with LXI SP, got 0x{:02X}", bus.memory().read(wboot_target));
     }
 
     #[test]
@@ -569,8 +569,8 @@ mod tests {
         let mut bus = ImsaiBus::new();
         Bios::install_jump_table(&mut bus);
 
-        assert_eq!(bus.memory.read(DPB_ADDR), 0x1A); // SPT low = 26
-        assert_eq!(bus.memory.read(DPB_ADDR + 1), 0x00); // SPT high
+        assert_eq!(bus.memory().read(DPB_ADDR), 0x1A); // SPT low = 26
+        assert_eq!(bus.memory().read(DPB_ADDR + 1), 0x00); // SPT high
     }
 
     #[test]
@@ -580,12 +580,12 @@ mod tests {
 
         // CONOUT (entry 4): MOV A,C; OUT 0x00; RET
         let conout_jmp = BIOS_BASE + 4 * 3;
-        let conout_target = bus.memory.read(conout_jmp + 1) as u16
-            | (bus.memory.read(conout_jmp + 2) as u16) << 8;
-        assert_eq!(bus.memory.read(conout_target), 0x79); // MOV A,C
-        assert_eq!(bus.memory.read(conout_target + 1), 0xD3); // OUT
-        assert_eq!(bus.memory.read(conout_target + 2), CON_DATA);
-        assert_eq!(bus.memory.read(conout_target + 3), 0xC9); // RET
+        let conout_target = bus.memory().read(conout_jmp + 1) as u16
+            | (bus.memory().read(conout_jmp + 2) as u16) << 8;
+        assert_eq!(bus.memory().read(conout_target), 0x79); // MOV A,C
+        assert_eq!(bus.memory().read(conout_target + 1), 0xD3); // OUT
+        assert_eq!(bus.memory().read(conout_target + 2), CON_DATA);
+        assert_eq!(bus.memory().read(conout_target + 3), 0xC9); // RET
     }
 
     #[test]
@@ -595,14 +595,14 @@ mod tests {
 
         // SECTRAN (entry 16) should start with MOV A,E (0x7B)
         let sectran_jmp = BIOS_BASE + 16 * 3;
-        let sectran_target = bus.memory.read(sectran_jmp + 1) as u16
-            | (bus.memory.read(sectran_jmp + 2) as u16) << 8;
-        assert_eq!(bus.memory.read(sectran_target), 0x7B); // MOV A,E
+        let sectran_target = bus.memory().read(sectran_jmp + 1) as u16
+            | (bus.memory().read(sectran_jmp + 2) as u16) << 8;
+        assert_eq!(bus.memory().read(sectran_target), 0x7B); // MOV A,E
 
         // The "MVI H,0" patch should have been applied (0x26, not 0x3E)
         // Find MOV L,A (0x6F) in SECTRAN routine
         let found_mvi_h = (0..30).any(|i| {
-            bus.memory.read(sectran_target + i as u16) == 0x26
+            bus.memory().read(sectran_target + i as u16) == 0x26
         });
         assert!(found_mvi_h, "SECTRAN should contain MVI H,0 (0x26)");
     }
@@ -614,32 +614,32 @@ mod tests {
 
         // DPH should be at DPH_ADDR with correct pointers
         // Layout: XLT(0) + scratch1(2) + scratch2(4) + scratch3(6) + DIRBUF(8) + DPB(10) + CSV(12) + ALV(14)
-        let xlt = bus.memory.read(DPH_ADDR) as u16
-            | (bus.memory.read(DPH_ADDR + 1) as u16) << 8;
+        let xlt = bus.memory().read(DPH_ADDR) as u16
+            | (bus.memory().read(DPH_ADDR + 1) as u16) << 8;
         assert_eq!(xlt, SKEW_ADDR, "XLT should point to skew table");
 
         // Scratch areas should be zeroed
-        assert_eq!(bus.memory.read(DPH_ADDR + 2), 0x00, "Scratch 1 low");
-        assert_eq!(bus.memory.read(DPH_ADDR + 3), 0x00, "Scratch 1 high");
-        assert_eq!(bus.memory.read(DPH_ADDR + 4), 0x00, "Scratch 2 low");
-        assert_eq!(bus.memory.read(DPH_ADDR + 5), 0x00, "Scratch 2 high");
-        assert_eq!(bus.memory.read(DPH_ADDR + 6), 0x00, "Scratch 3 low");
-        assert_eq!(bus.memory.read(DPH_ADDR + 7), 0x00, "Scratch 3 high");
+        assert_eq!(bus.memory().read(DPH_ADDR + 2), 0x00, "Scratch 1 low");
+        assert_eq!(bus.memory().read(DPH_ADDR + 3), 0x00, "Scratch 1 high");
+        assert_eq!(bus.memory().read(DPH_ADDR + 4), 0x00, "Scratch 2 low");
+        assert_eq!(bus.memory().read(DPH_ADDR + 5), 0x00, "Scratch 2 high");
+        assert_eq!(bus.memory().read(DPH_ADDR + 6), 0x00, "Scratch 3 low");
+        assert_eq!(bus.memory().read(DPH_ADDR + 7), 0x00, "Scratch 3 high");
 
-        let dirbuf = bus.memory.read(DPH_ADDR + 8) as u16
-            | (bus.memory.read(DPH_ADDR + 9) as u16) << 8;
+        let dirbuf = bus.memory().read(DPH_ADDR + 8) as u16
+            | (bus.memory().read(DPH_ADDR + 9) as u16) << 8;
         assert_eq!(dirbuf, DIRBUF_ADDR, "DIRBUF should point to directory buffer");
 
-        let dpb_ptr = bus.memory.read(DPH_ADDR + 10) as u16
-            | (bus.memory.read(DPH_ADDR + 11) as u16) << 8;
+        let dpb_ptr = bus.memory().read(DPH_ADDR + 10) as u16
+            | (bus.memory().read(DPH_ADDR + 11) as u16) << 8;
         assert_eq!(dpb_ptr, DPB_ADDR, "DPB pointer in DPH should point to DPB");
 
-        let csv = bus.memory.read(DPH_ADDR + 12) as u16
-            | (bus.memory.read(DPH_ADDR + 13) as u16) << 8;
+        let csv = bus.memory().read(DPH_ADDR + 12) as u16
+            | (bus.memory().read(DPH_ADDR + 13) as u16) << 8;
         assert_eq!(csv, CSV_ADDR, "CSV should point to check vector");
 
-        let alv = bus.memory.read(DPH_ADDR + 14) as u16
-            | (bus.memory.read(DPH_ADDR + 15) as u16) << 8;
+        let alv = bus.memory().read(DPH_ADDR + 14) as u16
+            | (bus.memory().read(DPH_ADDR + 15) as u16) << 8;
         assert_eq!(alv, ALV_ADDR, "ALV should point to allocation vector");
     }
 
@@ -651,13 +651,13 @@ mod tests {
         // SELDSK (entry 9) should load HL with DPH_ADDR
         // Find the SELDSK routine and verify it contains LXI H,DPH_ADDR
         let seldsk_jmp = BIOS_BASE + 9 * 3;
-        let seldsk_target = bus.memory.read(seldsk_jmp + 1) as u16
-            | (bus.memory.read(seldsk_jmp + 2) as u16) << 8;
+        let seldsk_target = bus.memory().read(seldsk_jmp + 1) as u16
+            | (bus.memory().read(seldsk_jmp + 2) as u16) << 8;
         // Should find LXI H,DPH_ADDR (0x21, lo, hi) somewhere in the routine
         let found_lxi_h = (0..20).any(|i| {
-            bus.memory.read(seldsk_target + i as u16) == 0x21
-                && (bus.memory.read(seldsk_target + i as u16 + 1) as u16
-                    | (bus.memory.read(seldsk_target + i as u16 + 2) as u16) << 8) == DPH_ADDR
+            bus.memory().read(seldsk_target + i as u16) == 0x21
+                && (bus.memory().read(seldsk_target + i as u16 + 1) as u16
+                    | (bus.memory().read(seldsk_target + i as u16 + 2) as u16) << 8) == DPH_ADDR
         });
         assert!(found_lxi_h, "SELDSK should contain LXI H,DPH_ADDR");
     }

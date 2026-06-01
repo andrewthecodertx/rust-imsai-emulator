@@ -1,12 +1,19 @@
 //! # IMSAI 8080 Emulator
 //!
 //! A Rust-based emulator for the IMSAI 8080 microcomputer system.
-//! Implements the Intel 8080 CPU, Tarbell FD1771 disk controller,
-//! and a CP/M 2.2 BIOS to run CP/M programs.
+//! Implements hardware-accurate chip and card models for the S-100 bus.
+//!
+//! Architecture:
+//! - Chips: silicon-level models (8251A UART, FD1771 FDC)
+//! - Cards: S-100 bus cards composed from chip models
+//! - Bus: passive S-100 backplane connecting CPU and cards
+//! - Imsai8080: top-level struct holding CPU + bus
 
 #![warn(missing_docs)]
 
-/// S-100 bus card trait and standard card implementations
+/// Chip-level models (8251A UART, FD1771 FDC)
+pub mod chips;
+/// S-100 bus card implementations
 pub mod card;
 /// CP/M 2.2 BIOS implementation (17-call BIOS with Tarbell controller)
 pub mod bios;
@@ -18,9 +25,9 @@ pub mod disk;
 pub mod dpb;
 /// The main emulator system
 pub mod emulator;
-/// I/O subsystem (keyboard, video, Tarbell controller)
+/// I/O subsystem (keyboard, video)
 pub mod io;
-/// Memory subsystem
+/// Memory subsystem (64K RAM, internal to MemoryCard)
 pub mod memory;
 /// System components
 pub mod system;
@@ -28,13 +35,10 @@ pub mod system;
 // Re-export the main components
 pub use bios::Bios;
 pub use bus::ImsaiBus;
-pub use card::{Card, ConsoleCard, TarbellCard};
+pub use card::{Card, ConsoleCard, MemoryCard, TarbellCard};
+pub use chips::Fd1771;
+pub use chips::Uart8251;
 pub use disk::DiskImage;
 pub use emulator::Imsai8080;
 pub use io::TarbellController;
 pub use memory::Memory;
-
-/// Create a new IMSAI 8080 emulator instance
-pub fn new() -> Imsai8080 {
-    Imsai8080::new()
-}

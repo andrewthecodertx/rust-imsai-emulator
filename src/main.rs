@@ -122,14 +122,14 @@ fn boot_cpm(emu: &mut rust_imsai_emulator::Imsai8080) {
             if end > BIOS_BASE as usize {
                 let avail = (BIOS_BASE - mem_addr) as usize;
                 for j in 0..avail {
-                    emu.bus.memory.write(mem_addr + j as u16, sector_data[j]);
+                    emu.bus.memory().write(mem_addr + j as u16, sector_data[j]);
                 }
                 mem_addr = BIOS_BASE;
                 sectors_loaded += 1;
                 continue;
             }
             for j in 0..sector_data.len() {
-                emu.bus.memory.write(mem_addr + j as u16, sector_data[j]);
+                emu.bus.memory().write(mem_addr + j as u16, sector_data[j]);
             }
             mem_addr += sector_data.len() as u16;
             sectors_loaded += 1;
@@ -153,31 +153,31 @@ fn run_step_trace(emu: &mut rust_imsai_emulator::Imsai8080, max: u64) {
 
     loop {
         let pc = emu.cpu.pc;
-        let op = emu.bus.memory.read(pc);
+        let op = emu.bus.mem_read(pc);
 
         let desc = match op {
             0xC3 => {
-                let lo = emu.bus.memory.read(pc + 1);
-                let hi = emu.bus.memory.read(pc + 2);
+                let lo = emu.bus.mem_read(pc + 1);
+                let hi = emu.bus.mem_read(pc + 2);
                 format!("JMP 0x{:02X}{:02X}", hi, lo)
             }
             0xCD => {
-                let lo = emu.bus.memory.read(pc + 1);
-                let hi = emu.bus.memory.read(pc + 2);
+                let lo = emu.bus.mem_read(pc + 1);
+                let hi = emu.bus.mem_read(pc + 2);
                 format!("CALL 0x{:02X}{:02X}", hi, lo)
             }
             0xC9 => "RET".to_string(),
             0xD3 => {
-                let port = emu.bus.memory.read(pc + 1);
+                let port = emu.bus.mem_read(pc + 1);
                 format!("OUT 0x{:02X},A=0x{:02X}", port, emu.cpu.a)
             }
             0xDB => {
-                let port = emu.bus.memory.read(pc + 1);
+                let port = emu.bus.mem_read(pc + 1);
                 format!("IN A,0x{:02X}", port)
             }
             0x31 => {
-                let lo = emu.bus.memory.read(pc + 1);
-                let hi = emu.bus.memory.read(pc + 2);
+                let lo = emu.bus.mem_read(pc + 1);
+                let hi = emu.bus.mem_read(pc + 2);
                 format!("LXI SP,0x{:02X}{:02X}", hi, lo)
             }
             0x00 => "NOP".to_string(),
@@ -206,15 +206,15 @@ fn run_diag(emu: &mut rust_imsai_emulator::Imsai8080, max: u64) {
 
     loop {
         let pc = emu.cpu.pc;
-        let op = emu.bus.memory.read(pc);
+        let op = emu.bus.mem_read(pc);
         emu.step();
         count += 1;
 
         if op == 0xD3 {
-            let port = emu.bus.memory.read(pc + 1);
+            let port = emu.bus.mem_read(pc + 1);
             io_log.push((count, port, emu.cpu.a, true));
         } else if op == 0xDB {
-            let port = emu.bus.memory.read(pc + 1);
+            let port = emu.bus.mem_read(pc + 1);
             io_log.push((count, port, emu.cpu.a, false));
         }
 
@@ -243,8 +243,8 @@ fn run_diag(emu: &mut rust_imsai_emulator::Imsai8080, max: u64) {
 
     println!("\n=== FINAL STATE ===");
     println!("PC=0x{:04X} SP=0x{:04X} A=0x{:02X}", emu.cpu.pc, emu.cpu.sp, emu.cpu.a);
-    println!("0x0000: {:02X} {:02X} {:02X}", emu.bus.memory.read(0), emu.bus.memory.read(1), emu.bus.memory.read(2));
-    println!("0x0005: {:02X} {:02X} {:02X}", emu.bus.memory.read(5), emu.bus.memory.read(6), emu.bus.memory.read(7));
+    println!("0x0000: {:02X} {:02X} {:02X}", emu.bus.mem_read(0), emu.bus.mem_read(1), emu.bus.mem_read(2));
+    println!("0x0005: {:02X} {:02X} {:02X}", emu.bus.mem_read(5), emu.bus.mem_read(6), emu.bus.mem_read(7));
 
     let display = emu.bus.console().video.get_display_string();
     if !display.trim().is_empty() && display.trim().chars().any(|c| c != ' ') {
@@ -287,14 +287,14 @@ fn run_terminal(emu: &mut rust_imsai_emulator::Imsai8080) {
         // Run a batch of CPU instructions
         for _ in 0..batch_size {
             let pc = emu.cpu.pc;
-            let op = emu.bus.memory.read(pc);
+            let op = emu.bus.mem_read(pc);
 
             emu.step();
             instruction_count += 1;
 
             // Intercept OUT 0x00/0x7B (console data) to print directly to terminal
             if op == 0xD3 {
-                let port = emu.bus.memory.read(pc + 1);
+                let port = emu.bus.mem_read(pc + 1);
                 if port == 0x00 || port == 0x7B {
                     let ch = emu.cpu.a;
                     if ch == 0x0D {
@@ -461,7 +461,7 @@ fn dump_memory(emu: &rust_imsai_emulator::Imsai8080, start: u16, len: usize, lab
         if i > 0 && i % 16 == 0 {
             print!("\n        ");
         }
-        print!("{:02X} ", emu.bus.memory.read(start + i as u16));
+        print!("{:02X} ", emu.bus.mem_read(start + i as u16));
     }
     println!();
 }
@@ -509,7 +509,7 @@ fn run_pc_trace(emu: &mut rust_imsai_emulator::Imsai8080, max: u64) {
     let mut count: u64 = 0;
     loop {
         let pc = emu.cpu.pc;
-        let op = emu.bus.memory.read(pc);
+        let op = emu.bus.mem_read(pc);
 
         // Capture registers BEFORE step
         let a = emu.cpu.a;
@@ -525,7 +525,7 @@ fn run_pc_trace(emu: &mut rust_imsai_emulator::Imsai8080, max: u64) {
         // Grab up to 4 bytes for the instruction
         let mut op_bytes = [0u8; 4];
         for j in 0..4u16 {
-            op_bytes[j as usize] = emu.bus.memory.read(pc.wrapping_add(j));
+            op_bytes[j as usize] = emu.bus.mem_read(pc.wrapping_add(j));
         }
 
         emu.step();
@@ -533,8 +533,8 @@ fn run_pc_trace(emu: &mut rust_imsai_emulator::Imsai8080, max: u64) {
 
         // Detect CALL 5 (BDOS entry)
         if op == 0xCD {
-            let lo = emu.bus.memory.read(pc + 1);
-            let hi = emu.bus.memory.read(pc + 2);
+            let lo = emu.bus.mem_read(pc + 1);
+            let hi = emu.bus.mem_read(pc + 2);
             let target = lo as u16 | (hi as u16) << 8;
             if target == 0x0005 {
                 call5_count += 1;
@@ -544,10 +544,10 @@ fn run_pc_trace(emu: &mut rust_imsai_emulator::Imsai8080, max: u64) {
 
         // Detect I/O
         if op == 0xD3 {
-            let port = emu.bus.memory.read(pc + 1);
+            let port = emu.bus.mem_read(pc + 1);
             io_log.push((count, port, a, true));
         } else if op == 0xDB {
-            let port = emu.bus.memory.read(pc + 1);
+            let port = emu.bus.mem_read(pc + 1);
             io_log.push((count, port, a, false));
         }
 
@@ -659,9 +659,9 @@ fn run_pc_trace(emu: &mut rust_imsai_emulator::Imsai8080, max: u64) {
         emu.cpu.pc, emu.cpu.sp, emu.cpu.a,
         emu.cpu.b, emu.cpu.c, emu.cpu.d, emu.cpu.e, emu.cpu.h, emu.cpu.l);
     println!("0x0000: {:02X} {:02X} {:02X}   (WBOOT vector)",
-        emu.bus.memory.read(0), emu.bus.memory.read(1), emu.bus.memory.read(2));
+        emu.bus.mem_read(0), emu.bus.mem_read(1), emu.bus.mem_read(2));
     println!("0x0005: {:02X} {:02X} {:02X}   (BDOS vector)",
-        emu.bus.memory.read(5), emu.bus.memory.read(6), emu.bus.memory.read(7));
+        emu.bus.mem_read(5), emu.bus.mem_read(6), emu.bus.mem_read(7));
 }
 
 /// Minimal 8080 disassembler for trace output.
@@ -839,13 +839,13 @@ fn run_verbose_trace(emu: &mut rust_imsai_emulator::Imsai8080, max: u64) {
     let mut count: u64 = 0;
     loop {
         let pc = emu.cpu.pc;
-        let op = emu.bus.memory.read(pc);
+        let op = emu.bus.mem_read(pc);
 
         emu.step();
         count += 1;
 
         if op == 0xD3 {
-            let port = emu.bus.memory.read(pc + 1);
+            let port = emu.bus.mem_read(pc + 1);
             if port == 0x00 && (emu.cpu.a >= 32 && emu.cpu.a < 127 || emu.cpu.a == 0x0D || emu.cpu.a == 0x0A) {
                 print!("{}", emu.cpu.a as char);
                 let _ = std::io::Write::flush(&mut std::io::stdout());
@@ -855,7 +855,7 @@ fn run_verbose_trace(emu: &mut rust_imsai_emulator::Imsai8080, max: u64) {
                 }
             }
         } else if op == 0xDB {
-            let port = emu.bus.memory.read(pc + 1);
+            let port = emu.bus.mem_read(pc + 1);
             if port == 0x01 || port == 0xF9 {
                 // Console/disk status polling - too noisy
             } else if (0x48..=0x4B).contains(&port) || (0xF8..=0xFD).contains(&port) {
@@ -898,14 +898,14 @@ fn run_hybrid_test(emu: &mut rust_imsai_emulator::Imsai8080, max_instructions: u
         // Step batches of 1000 and flush video buffer periodically
         for _ in 0..flush_interval {
             let pc = emu.cpu.pc;
-            let op = emu.bus.memory.read(pc);
+            let op = emu.bus.mem_read(pc);
 
             emu.step();
             count += 1;
 
             // Monitor I/O
             if op == 0xD3 {
-                let port = emu.bus.memory.read(pc + 1);
+                let port = emu.bus.mem_read(pc + 1);
                 let val = emu.cpu.a;
                 if port == 0x00 || port == 0x01 {
                     io_events.push((count, 'O', port, val));
@@ -920,7 +920,7 @@ fn run_hybrid_test(emu: &mut rust_imsai_emulator::Imsai8080, max_instructions: u
                     ever_saw_disk_out = true;
                 }
             } else if op == 0xDB {
-                let port = emu.bus.memory.read(pc + 1);
+                let port = emu.bus.mem_read(pc + 1);
                 if (0x48..=0x4B).contains(&port) || (0xF8..0xFD).contains(&port) {
                     io_events.push((count, 'I', port, emu.cpu.a));
                 }
@@ -1009,14 +1009,14 @@ fn run_scripted(emu: &mut rust_imsai_emulator::Imsai8080, cmd: Option<&str>, max
 
     loop {
         let pc = emu.cpu.pc;
-        let op = emu.bus.memory.read(pc);
+        let op = emu.bus.mem_read(pc);
 
         emu.step();
         count += 1;
 
         // Capture console output (port 0x00 or 0x7B OUT)
         if op == 0xD3 {
-            let port = emu.bus.memory.read(pc + 1);
+            let port = emu.bus.mem_read(pc + 1);
             if port == 0x00 || port == 0x7B {
                 let ch = emu.cpu.a;
                 if ch == 0x0D {
@@ -1035,7 +1035,7 @@ fn run_scripted(emu: &mut rust_imsai_emulator::Imsai8080, cmd: Option<&str>, max
 
         // Track disk I/O for debugging: log READ commands
         if op == 0xD3 {
-            let port = emu.bus.memory.read(pc + 1);
+            let port = emu.bus.mem_read(pc + 1);
             if port == 0x48 && emu.cpu.a == 0x80 {
                 let track = emu.bus.tarbell().current_track();
                 let sector = emu.bus.tarbell().current_sector();
@@ -1069,7 +1069,7 @@ fn dump_memory_eprint(emu: &rust_imsai_emulator::Imsai8080, start: u16, len: usi
         if i > 0 && i % 16 == 0 {
             eprint!("\n        ");
         }
-        eprint!("{:02X} ", emu.bus.memory.read(start + i as u16));
+        eprint!("{:02X} ", emu.bus.mem_read(start + i as u16));
     }
     eprintln!();
 }

@@ -1,11 +1,14 @@
-//! S-100 bus card trait and standard cards
+//! S-100 bus card trait and standard card implementations
 //!
 //! In a real IMSAI 8080, the S-100 bus is a passive backplane. Cards plug in
 //! and communicate via address lines, data lines, and control signals. Each
-//! card owns a range of I/O ports and responds to reads/writes on those ports.
+//! card owns a range of I/O ports and/or memory addresses and responds to
+//! bus transactions on those addresses/ports.
 //!
-//! This module defines the `Card` trait that all S-100 cards implement, and
-//! provides the standard card implementations for the IMSAI 8080 emulator.
+//! The Card trait is the common interface. MemoryCard owns the full 64K
+//! address space. ConsoleCard owns ports 0x00-0x01. TarbellCard owns
+//! ports 0x48-0x4B. The bus dispatches to the first card that claims
+//! a given address or port.
 
 use crate::io::Keyboard;
 use crate::io::VideoDisplay;
@@ -13,53 +16,102 @@ use crate::io::TarbellController;
 
 /// An S-100 bus card.
 ///
-/// Each card occupies a range of I/O ports and responds to read/write
-/// operations on those ports. The bus dispatches I/O operations to the
-/// appropriate card based on port address.
+/// Cards respond to two kinds of bus transactions:
+/// - Memory transactions (mem_read/mem_write) for the address bus
+/// - I/O transactions (io_read/io_write) for the port bus
 ///
-/// Cards own their own state (disk images, keyboard buffers, video memory,
-/// etc.) and are entirely self-contained. The bus never reaches into a
-/// card's internals directly.
+/// A memory card (RAM) responds to memory transactions.
+/// A peripheral card (Tarbell, console) responds to I/O transactions.
+/// Some cards could do both (e.g., memory-mapped I/O).
 pub trait Card {
-    /// Read from an I/O port that this card owns.
+    /// Read from an I/O port this card owns.
     fn io_read(&mut self, port: u8) -> u8;
-
-    /// Write to an I/O port that this card owns.
+    /// Write to an I/O port this card owns.
     fn io_write(&mut self, port: u8, value: u8);
-
-    /// Check if this card responds to the given I/O port.
+    /// Does this card respond to the given I/O port?
     fn owns_port(&self, port: u8) -> bool;
 
-    /// Human-readable name for this card (for diagnostics).
-    fn name(&self) -> &'static str;
+    /// Read from a memory address this card owns.
+    fn mem_read(&self, addr: u16) -> Option<u8>;
+    /// Write to a memory address this card owns.
+    fn mem_write(&mut self, addr: u16, value: u8) -> bool;
+    /// Does this card own the given memory address?
+    fn owns_address(&self, addr: u16) -> bool;
 
-    /// Support downcasting for typed card access.
-    /// Required because Rust traits are not `Sized` by default and
-    /// we need `dyn Card` to be downcastable to concrete types.
+    /// Human-readable name for diagnostics.
+    fn name(&self) -> &'static str;
+    /// Downcast support (mutable).
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any;
+    /// Downcast support (immutable).
+    fn as_any(&self) -> &dyn std::any::Any;
 }
 
 // ---------------------------------------------------------------------------
-// Console Card — ports 0x00-0x01
+// Memory Card — full 64K address space
+// ---------------------------------------------------------------------------
+
+/// Memory card: 64KB static RAM on the S-100 bus.
+///
+/// In a real IMSAI, you'd have 4-8 RAM cards (8K or 16K each) each decoding
+/// their own address range. For simplicity, one card owns the whole 64K.
+/// Memory cards don't respond to any I/O ports.
+pub struct MemoryCard {
+    /// 64K RAM, initialized to 0xFF (unused bus state)
+    pub ram: [u8; 65536],
+}
+
+impl MemoryCard {
+    pub fn new() -> Self {
+        Self { ram: [0xFF; 65536] }
+    }
+
+    pub fn new_zeroed() -> Self {
+        Self { ram: [0x00; 65536] }
+    }
+
+    pub fn read(&self, addr: u16) -> u8 {
+        self.ram[addr as usize]
+    }
+
+    pub fn write(&mut self, addr: u16, value: u8) {
+        self.ram[addr as usize] = value;
+    }
+}
+
+impl Default for MemoryCard {
+    fn default() -> Self { Self::new() }
+}
+
+impl Card for MemoryCard {
+    fn io_read(&mut self, _port: u8) -> u8 { 0xFF }
+    fn io_write(&mut self, _port: u8, _value: u8) {}
+    fn owns_port(&self, _port: u8) -> bool { false }
+
+    fn mem_read(&self, addr: u16) -> Option<u8> {
+        Some(self.ram[addr as usize])
+    }
+    fn mem_write(&mut self, addr: u16, value: u8) -> bool {
+        self.ram[addr as usize] = value;
+        true
+    }
+    fn owns_address(&self, _addr: u16) -> bool { true }
+
+    fn name(&self) -> &'static str { "64K Memory" }
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any { self }
+    fn as_any(&self) -> &dyn std::any::Any { self }
+}
+
+// ---------------------------------------------------------------------------
+// Console Card — ports 0x00-0x01, 0x79, 0x7B
 // ---------------------------------------------------------------------------
 
 /// Console card combining keyboard input and video display output.
-///
-/// Ports:
-/// - 0x00: Data port. Read: get keyboard character. Write: write character to display.
-/// - 0x01: Status port. Read: bit 0 = key ready, bit 1 = display ready.
-///
-/// This represents a single S-100 card with a serial I/O chip (like the
-/// IMSAI 4PIO or SIO-2) wired to a terminal.
 pub struct ConsoleCard {
-    /// Keyboard input buffer
     pub keyboard: Keyboard,
-    /// Video display controller
     pub video: VideoDisplay,
 }
 
 impl ConsoleCard {
-    /// Create a new console card with default 80x24 display.
     pub fn new() -> Self {
         Self {
             keyboard: Keyboard::new(),
@@ -67,179 +119,99 @@ impl ConsoleCard {
         }
     }
 
-    /// Queue characters for the CP/M keyboard to read.
-    ///
-    /// This is the primary way to feed input into the emulator. The
-    /// keyboard buffer is consumed by the CP/M CONIN BIOS routine
-    /// when it reads port 0x00.
-    pub fn type_text(&mut self, text: &str) {
-        self.keyboard.type_text(text);
-    }
-
-    /// Check if a keyboard character is ready to read.
-    pub fn is_key_ready(&self) -> bool {
-        self.keyboard.is_char_ready()
-    }
-
-    /// Get a reference to the video display for rendering.
-    pub fn video(&self) -> &VideoDisplay {
-        &self.video
-    }
-
-    /// Get a mutable reference to the video display.
-    pub fn video_mut(&mut self) -> &mut VideoDisplay {
-        &mut self.video
-    }
-
-    /// Disable auto-rendering (for terminal mode where we handle output directly).
-    pub fn set_auto_render(&mut self, enabled: bool) {
-        self.video.auto_render = enabled;
-    }
+    pub fn type_text(&mut self, text: &str) { self.keyboard.type_text(text); }
+    pub fn is_key_ready(&self) -> bool { self.keyboard.is_char_ready() }
+    pub fn video(&self) -> &VideoDisplay { &self.video }
+    pub fn video_mut(&mut self) -> &mut VideoDisplay { &mut self.video }
+    pub fn set_auto_render(&mut self, enabled: bool) { self.video.auto_render = enabled; }
 }
 
 impl Default for ConsoleCard {
-    fn default() -> Self {
-        Self::new()
-    }
+    fn default() -> Self { Self::new() }
 }
 
 impl Card for ConsoleCard {
     fn io_read(&mut self, port: u8) -> u8 {
         match port {
             0x00 => self.keyboard.read_char(),
-            0x01 => {
-                let mut status = 0x02; // Display always ready
-                if self.keyboard.is_char_ready() {
-                    status |= 0x01; // Key ready
-                }
+            0x01 | 0x79 => {
+                let mut status = 0x02;
+                if self.keyboard.is_char_ready() { status |= 0x01; }
                 status
             }
             _ => 0xFF,
         }
     }
-
     fn io_write(&mut self, port: u8, value: u8) {
-        match port {
-            0x00 | 0x7B => {
-                // Port 0x00 and 0x7B both go to the display
-                self.video.write_char(value);
-                if self.video.auto_render {
-                    self.video.render();
-                }
-            }
-            _ => {}
+        if port == 0x00 || port == 0x7B {
+            self.video.write_char(value);
+            if self.video.auto_render { self.video.render(); }
         }
     }
-
     fn owns_port(&self, port: u8) -> bool {
-        // Console card owns ports 0x00, 0x01, and 0x7B (CMI5619 alias)
-        port == 0x00 || port == 0x01 || port == 0x7B || port == 0x79
+        port == 0x00 || port == 0x01 || port == 0x79 || port == 0x7B
     }
+    fn mem_read(&self, _addr: u16) -> Option<u8> { None }
+    fn mem_write(&mut self, _addr: u16, _value: u8) -> bool { false }
+    fn owns_address(&self, _addr: u16) -> bool { false }
 
-    fn name(&self) -> &'static str {
-        "Console"
-    }
-
-    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
-        self
-    }
+    fn name(&self) -> &'static str { "Console" }
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any { self }
+    fn as_any(&self) -> &dyn std::any::Any { self }
 }
 
 // ---------------------------------------------------------------------------
-// Tarbell Disk Controller Card — ports 0x48-0x4B
+// Tarbell Disk Controller Card — ports 0x48-0x4B, 0xF8-0xFF
 // ---------------------------------------------------------------------------
 
 /// Tarbell 1011/1011B floppy disk controller card.
-///
-/// Ports:
-/// - 0x48: Status register (read) / Command register (write)
-/// - 0x49: Track register
-/// - 0x4A: Sector register
-/// - 0x4B: Data register
-///
-/// Also responds to CMI5619 aliases at 0xF8-0xFB, 0xFC (wait/DRQ),
-/// 0xFD (DMA check), and 0xFF (front panel).
 pub struct TarbellCard {
     controller: TarbellController,
 }
 
 impl TarbellCard {
-    /// Create a new Tarbell card with no disks inserted.
-    pub fn new() -> Self {
-        Self {
-            controller: TarbellController::new(),
-        }
-    }
-
-    /// Insert a disk image into a drive.
+    pub fn new() -> Self { Self { controller: TarbellController::new() } }
     pub fn insert_disk(&mut self, drive: usize, path: &str) -> Result<(), String> {
         self.controller.insert_disk(drive, path)
     }
-
-    /// Get a reference to the disk in a drive (for boot loading).
     pub fn get_disk(&self, drive: usize) -> Option<&crate::disk::DiskImage> {
         self.controller.get_disk(drive)
     }
-
-    /// Get the current track register value (for diagnostics).
-    pub fn current_track(&self) -> u8 {
-        self.controller.current_track()
-    }
-
-    /// Get the current sector register value (for diagnostics).
-    pub fn current_sector(&self) -> u8 {
-        self.controller.current_sector()
-    }
+    pub fn current_track(&self) -> u8 { self.controller.current_track() }
+    pub fn current_sector(&self) -> u8 { self.controller.current_sector() }
 }
 
 impl Default for TarbellCard {
-    fn default() -> Self {
-        Self::new()
-    }
+    fn default() -> Self { Self::new() }
 }
 
 impl Card for TarbellCard {
     fn io_read(&mut self, port: u8) -> u8 {
-        // Map CMI5619 aliases to Tarbell ports
         let tarbell_port = match port {
-            0xF8 => 0x48,
-            0xF9 => 0x49,
-            0xFA => 0x4A,
-            0xFB => 0x4B,
+            0xF8 => 0x48, 0xF9 => 0x49, 0xFA => 0x4A, 0xFB => 0x4B,
             0xFC => return self.controller.wait_port_value(),
-            0xFD => return 0x00, // DMA check
-            0xFF => return 0x03,  // Front panel: key ready + display ready
+            0xFD => return 0x00,
+            0xFF => return 0x03,
             _ => port,
         };
         self.controller.io_in(tarbell_port)
     }
-
     fn io_write(&mut self, port: u8, value: u8) {
-        // Map CMI5619 aliases to Tarbell ports
         let tarbell_port = match port {
-            0xF8 => 0x48,
-            0xF9 => 0x49,
-            0xFA => 0x4A,
-            0xFB => 0x4B,
-            0xFC | 0xFD | 0xFF => return, // Write-only control ports, ignored
+            0xF8 => 0x48, 0xF9 => 0x49, 0xFA => 0x4A, 0xFB => 0x4B,
+            0xFC | 0xFD | 0xFF => return,
             _ => port,
         };
         self.controller.io_out(tarbell_port, value);
     }
-
     fn owns_port(&self, port: u8) -> bool {
-        // Tarbell primary: 0x48-0x4B
-        // CMI5619 aliases: 0xF8-0xFB, 0xFC, 0xFD, 0xFF
-        (0x48..=0x4B).contains(&port)
-            || (0xF8..=0xFD).contains(&port)
-            || port == 0xFF
+        (0x48..=0x4B).contains(&port) || (0xF8..=0xFD).contains(&port) || port == 0xFF
     }
+    fn mem_read(&self, _addr: u16) -> Option<u8> { None }
+    fn mem_write(&mut self, _addr: u16, _value: u8) -> bool { false }
+    fn owns_address(&self, _addr: u16) -> bool { false }
 
-    fn name(&self) -> &'static str {
-        "Tarbell"
-    }
-
-    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
-        self
-    }
+    fn name(&self) -> &'static str { "Tarbell" }
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any { self }
+    fn as_any(&self) -> &dyn std::any::Any { self }
 }
