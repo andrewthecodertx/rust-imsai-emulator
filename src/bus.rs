@@ -1,75 +1,75 @@
 //! S-100 bus implementation for the IMSAI 8080 emulator
 //!
-//! Implements the intel8080 Bus trait, connecting the CPU to memory
-//! and I/O devices. I/O port mapping:
+//! The S-100 bus is the passive backplane that connects all cards. The CPU
+//! drives memory and I/O transactions on the bus, and cards respond to the
+//! ports they own.
 //!
-//! - Port 0x00: Console data (read: keyboard, write: display)
-//! - Port 0x01: Console status (read: bit 0 = key ready, bit 1 = display ready)
-//! - Port 0x48-0x4B: Tarbell disk controller (ports 0-3)
-//! - Port 0x79: CMI5619 console status (aliased to port 0x01)
-//! - Port 0x7B: CMI5619 console data (aliased to port 0x00)
-//! - Port 0xF8-0xFB: CMI5619 disk controller (aliased to Tarbell ports 0-3)
-//! - Port 0xFC: CMI5619 disk wait/DRQ
-//! - Port 0xFD: CMI5619 DMA check / extended disk latch
-//! - Port 0xFF: IMSAI front panel / CMI5619 SIO control
+//! The bus owns:
+//! - 64KB memory (always present)
+//! - A collection of S-100 cards (dynamic, pluggable)
+//!
+//! Cards are added at startup and the bus dispatches I/O operations to the
+//! appropriate card based on port address. No card internals are accessed
+//! directly through the bus.
 
 use intel8080::Bus;
-
-use crate::io::IoController;
+use crate::card::{Card, ConsoleCard, TarbellCard};
 use crate::memory::Memory;
 
-/// Console data port (standard)
-pub const PORT_CONSOLE_DATA: u8 = 0x00;
-/// Console status port (standard)
-pub const PORT_CONSOLE_STATUS: u8 = 0x01;
-
-/// CMI5619 console status port
-const CMI5619_CONSTAT: u8 = 0x79;
-/// CMI5619 console data port
-const CMI5619_CDATA: u8 = 0x7B;
-
-/// Tarbell controller port base
-const TARBELL_BASE: u8 = 0x48;
-/// Tarbell controller port count (4 ports: 0x48-0x4B)
-const TARBELL_COUNT: u8 = 4;
-
-/// CMI5619 disk controller port base (aliased to Tarbell)
-const CMI5619_DISK_BASE: u8 = 0xF8;
-/// CMI5619 disk port count (4 ports: 0xF8-0xFB)
-const CMI5619_DISK_COUNT: u8 = 4;
-
-/// CMI5619 disk wait/DRQ port
-const CMI5619_WAIT_PORT: u8 = 0xFC;
-/// CMI5619 DMA check / extended disk latch
-const CMI5619_DCONT_PORT: u8 = 0xFD;
-
-/// IMSAI front panel / CMI5619 SIO control
-const PANEL_PORT: u8 = 0xFF;
-
-/// Status register bits
-const STATUS_KEY_READY: u8 = 0x01;
-const STATUS_DISPLAY_READY: u8 = 0x02;
-
-/// The S-100 system bus connecting CPU, memory, and I/O
+/// The S-100 system bus connecting CPU, memory, and I/O cards.
 pub struct ImsaiBus {
     /// 64KB addressable memory
     pub memory: Memory,
-    /// I/O controller (keyboard, display, disk)
-    pub io: IoController,
+    /// Pluggable S-100 cards
+    cards: Vec<Box<dyn Card>>,
 }
 
 impl ImsaiBus {
+    /// Create a new bus with empty memory and no cards.
     pub fn new() -> Self {
         Self {
             memory: Memory::new(),
-            io: IoController::new(),
+            cards: Vec::new(),
         }
     }
 
+    /// Insert an S-100 card into the bus.
+    ///
+    /// Cards are checked in insertion order. The first card that claims
+    /// a port gets the I/O operation.
+    pub fn insert_card(&mut self, card: Box<dyn Card>) {
+        self.cards.push(card);
+    }
+
+    /// Load a block of data into memory at the given address.
     pub fn load(&mut self, start: u16, data: &[u8]) {
         for (i, &byte) in data.iter().enumerate() {
             self.memory.write(start + i as u16, byte);
         }
+    }
+
+    /// Get a reference to the console card (for keyboard/video access).
+    pub fn console(&mut self) -> &mut ConsoleCard {
+        self.card_mut::<ConsoleCard>().expect("Console card not installed")
+    }
+
+    /// Get a reference to the Tarbell disk card (for disk operations).
+    pub fn tarbell(&mut self) -> &mut TarbellCard {
+        self.card_mut::<TarbellCard>().expect("Tarbell card not installed")
+    }
+
+    /// Find the first card of a specific type.
+    ///
+    /// Returns a mutable reference to the card if found.
+    /// Used by main.rs for boot loading (get disk to read system tracks)
+    /// and by terminal mode (feed keyboard input, get display output).
+    pub fn card_mut<T: Card + 'static>(&mut self) -> Option<&mut T> {
+        for card in &mut self.cards {
+            if let Some(typed) = card.as_any_mut().downcast_mut::<T>() {
+                return Some(typed);
+            }
+        }
+        None
     }
 }
 
@@ -89,72 +89,21 @@ impl Bus for ImsaiBus {
     }
 
     fn io_in(&mut self, port: u8) -> u8 {
-        match port {
-            // Standard console
-            PORT_CONSOLE_DATA => self.io.keyboard.read_char(),
-            PORT_CONSOLE_STATUS => {
-                let mut status = STATUS_DISPLAY_READY;
-                if self.io.keyboard.is_char_ready() {
-                    status |= STATUS_KEY_READY;
-                }
-                status
+        for card in &mut self.cards {
+            if card.owns_port(port) {
+                return card.io_read(port);
             }
-            // CMI5619 console ports (aliased to our console)
-            CMI5619_CONSTAT => {
-                let mut status = STATUS_DISPLAY_READY;
-                if self.io.keyboard.is_char_ready() {
-                    status |= STATUS_KEY_READY;
-                }
-                status
-            }
-            CMI5619_CDATA => self.io.keyboard.read_char(),
-            // Tarbell controller ports (0x48-0x4B)
-            p if (TARBELL_BASE..TARBELL_BASE + TARBELL_COUNT).contains(&p) => {
-                self.io.tarbell.io_in(p)
-            }
-            // CMI5619 disk ports (0xF8-0xFB) — alias to Tarbell
-            p if (CMI5619_DISK_BASE..CMI5619_DISK_BASE + CMI5619_DISK_COUNT).contains(&p) => {
-                let tarbell_port = TARBELL_BASE + (p - CMI5619_DISK_BASE);
-                self.io.tarbell.io_in(tarbell_port)
-            }
-            // CMI5619 WAIT port: DRQ signal
-            CMI5619_WAIT_PORT => self.io.tarbell.wait_port_value(),
-            // CMI5619 DMA check / ext latch
-            CMI5619_DCONT_PORT => 0x00,
-            // CMI5619 SIO control / front panel: ready status
-            PANEL_PORT => STATUS_DISPLAY_READY | STATUS_KEY_READY,
-            // DMA ports (0xE0-0xE8): not implemented
-            0xE0 | 0xE1 | 0xE8 => 0x00,
-            _ => 0xFF,
         }
+        0xFF // Unclaimed ports return 0xFF
     }
 
     fn io_out(&mut self, port: u8, value: u8) {
-        match port {
-            // Standard console
-            PORT_CONSOLE_DATA => {
-                self.io.video.write_char(value);
-                self.io.video.render();
+        for card in &mut self.cards {
+            if card.owns_port(port) {
+                card.io_write(port, value);
+                return;
             }
-            // CMI5619 console data
-            CMI5619_CDATA => {
-                self.io.video.write_char(value);
-                self.io.video.render();
-            }
-            // Tarbell controller ports (0x48-0x4B)
-            p if (TARBELL_BASE..TARBELL_BASE + TARBELL_COUNT).contains(&p) => {
-                self.io.tarbell.io_out(p, value);
-            }
-            // CMI5619 disk ports (0xF8-0xFB)
-            p if (CMI5619_DISK_BASE..CMI5619_DISK_BASE + CMI5619_DISK_COUNT).contains(&p) => {
-                let tarbell_port = TARBELL_BASE + (p - CMI5619_DISK_BASE);
-                self.io.tarbell.io_out(tarbell_port, value);
-            }
-            // CMI5619 WAIT/DCONT/SIO/front panel — write ignored
-            CMI5619_WAIT_PORT | CMI5619_DCONT_PORT | PANEL_PORT => {}
-            // DMA ports — ignored
-            0xE0 | 0xE1 | 0xE8 => {}
-            _ => {}
         }
+        // Unclaimed ports: ignore
     }
 }

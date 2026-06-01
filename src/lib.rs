@@ -6,17 +6,19 @@
 
 #![warn(missing_docs)]
 
-/// S-100 system bus
-pub mod bus;
+/// S-100 bus card trait and standard card implementations
+pub mod card;
 /// CP/M 2.2 BIOS implementation (17-call BIOS with Tarbell controller)
 pub mod bios;
+/// S-100 system bus
+pub mod bus;
 /// CP/M disk image creation and management
 pub mod disk;
 /// Disk parameter block definitions
 pub mod dpb;
 /// The main emulator system
 pub mod emulator;
-/// I/O subsystem
+/// I/O subsystem (keyboard, video, Tarbell controller)
 pub mod io;
 /// Memory subsystem
 pub mod memory;
@@ -26,6 +28,7 @@ pub mod system;
 // Re-export the main components
 pub use bios::Bios;
 pub use bus::ImsaiBus;
+pub use card::{Card, ConsoleCard, TarbellCard};
 pub use disk::DiskImage;
 pub use emulator::Imsai8080;
 pub use io::TarbellController;
