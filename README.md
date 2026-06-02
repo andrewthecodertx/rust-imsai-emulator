@@ -1,19 +1,19 @@
 # IMSAI 8080 Emulator
 
-A Rust emulator for the IMSAI 8080 with a custom BIOS and Tarbell floppy controller. Includes a raylib front panel GUI with toggle switches, LEDs, and a console display.
+A Rust emulator for the IMSAI 8080 with a Tarbell FD1771 floppy controller and raylib front panel GUI (toggle switches, LEDs, console display).
 
 ![IMSAI 8080 front panel](docs/imsai-screenshot.png)
 
 ## What It Does
 
-Emulates the IMSAI 8080 hardware: Intel 8080 CPU, 64KB RAM, Tarbell FD1771 floppy controller, and IMSAI SIO-2 serial board. Supports interactive terminal mode and a visual front panel GUI.
+Emulates the IMSAI 8080 hardware: Intel 8080 CPU, 64KB RAM, Tarbell FD1771 floppy disk controller, and IMSAI SIO-2 dual serial board. Supports interactive terminal mode (CLI) and a visual front panel GUI.
 
-**Current status**: Boots and runs programs loaded via `--load` or `--program`. Terminal mode provides interactive keyboard input and console output. Disk I/O and CP/M support are under development.
+**Current status**: Boots and runs programs loaded via `--load` or `--program`. Terminal mode provides interactive keyboard input and console output. A custom CP/M BIOS and disk I/O path are needed for CP/M execution and are not yet implemented.
 
 ## Hardware Emulated
 
 - Intel 8080 CPU ([rust-intel8080-emulator](https://github.com/andrewthecodertx/rust-intel8080-emulator))
-- 64KB RAM
+- 64KB RAM (0xFF on power-up, matching floating bus behavior)
 - Tarbell 1011 floppy disk controller (FD1771, 8" SSSD, ports 0x48-0x4B)
 - IMSAI SIO-2 dual serial board (2x Intel 8251A UART, ports 0x00-0x03)
 - IMSAI 8080 front panel (toggle switches, LEDs, function buttons)
@@ -27,21 +27,17 @@ The `imsai-gui` binary provides a visual raylib front panel:
 cargo run --bin imsai-gui
 ```
 
-Defaults to empty memory (all addresses = 0xFF), matching a powered-on
-IMSAI with no software. Use the program loader (F2) or command-line flags
-to load software before pressing F5 to run.
+Defaults to empty memory (all addresses = 0xFF), matching a powered-on IMSAI with no software. Use the program loader (F2) or command-line flags to load software before pressing F5 to run.
 
-Memory state is automatically saved to `imsai_memory.json` on exit and
-restored on the next launch. Press R to cold-reset (clears memory and
-deletes the saved state).
+Memory state is automatically saved to `imsai_memory.json` on exit and restored on the next launch. Press R to cold-reset (clears memory and deletes the saved state).
 
-| Flag                     | Description                                      |
-| ------------------------ | ------------------------------------------------ |
-| (none)                   | Start with empty memory, STOPPED                  |
-| `--bare`                 | Same as default (kept for compatibility)          |
-| `--load <file> [0xADDR]` | Load raw binary file at address                    |
-| `--disk <file>`          | Mount disk image in drive A                       |
-| `--program <file>`       | Load and execute a front panel program (JSON)      |
+| Flag                     | Description                                         |
+| ------------------------ | --------------------------------------------------- |
+| (none)                   | Start with empty memory, STOPPED                    |
+| `--bare`                 | Same as default (kept for compatibility)            |
+| `--load <file> [0xADDR]` | Load raw binary file at address (default 0x0000)    |
+| `--disk <file>`          | Mount disk image in drive A                         |
+| `--program <file>`       | Load and execute a front panel program (.json)       |
 
 ### Front Panel Programs
 
@@ -69,7 +65,7 @@ Step types:
 | `deposit_next` | `data`            | Set data switches, press DEPOSIT NEXT (auto-advances)    |
 | `examine`      | `address`         | Set address switches, press EXAMINE                      |
 | `examine_next` | (none)            | Press EXAMINE NEXT (auto-advances)                       |
-| `run`          | `address`         | Set address switches, press RUN/STOP                     |
+| `run`          | `address`         | Set address switches, press RUN/STOP                    |
 | `load`         | `address`, `data` | Load hex bytes directly into memory (no switch toggling) |
 
 The `load` action is a shortcut that writes bytes via `load_program()` instead of toggling each byte through the front panel. Use it for longer programs. The other actions operate the front panel interface exactly as a human would.
@@ -94,7 +90,7 @@ cargo run --bin imsai-gui -- --program programs/hello-world.json
 | DEPOSIT button                  | Write data switches into memory at address switches |
 | EX NXT / DEP NXT                | Increment address then examine/deposit              |
 | R key                           | Cold reset (clear RAM, delete `imsai_memory.json`) |
-| Keyboard (when running)         | Send characters to console UART                     |
+| Keyboard (when running)         | Send characters to console UART                    |
 
 ### Terminal Mode (CLI)
 
@@ -142,6 +138,7 @@ Options:
 - Only 8" SSSD floppy format (77 tracks, 26 sectors, 128 bytes/sector)
 - No cycle-accurate timing
 - Serial I/O polling only (no interrupt-driven input)
+- No CP/M boot path (BIOS not yet implemented)
 
 ## License
 
@@ -150,4 +147,3 @@ MIT, see [LICENSE](LICENSE).
 ## Contributing
 
 PRs welcome. Please open an issue first for major changes.
-
