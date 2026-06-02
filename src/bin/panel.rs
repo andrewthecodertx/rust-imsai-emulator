@@ -201,8 +201,9 @@ const CTRL_X0: i32 = PX + 899; // center of first control paddle
 // Terminal dimensions
 const TERM_COLS: usize = 80;
 const TERM_ROWS: usize = 24;
-const TERM_CHAR_W: i32 = 7;
-const TERM_CHAR_H: i32 = 12;
+const TERM_CHAR_W: i32 = 9;
+const TERM_CHAR_H: i32 = 16;
+const TERM_FONT_SIZE: i32 = 14;
 
 /// X center of address bit `i` (0 = MSB/bit15, 15 = LSB/bit0) in the LED/switch grid.
 fn addr_col_x(i: usize) -> i32 {
@@ -1141,14 +1142,14 @@ fn main() {
             b: 10,
             a: 40,
         };
-        for scan_y in (term_y..term_y + term_h).step_by(3) {
+        for scan_y in (term_y..term_y + term_h).step_by(4) {
             d.draw_rectangle(term_x, scan_y, term_w, 1, scanline_col);
         }
         d.draw_text(
             "CONSOLE",
             term_x + 4,
             term_y + 2,
-            10,
+            12,
             raylib::color::Color {
                 r: 30,
                 g: 80,
@@ -1157,8 +1158,8 @@ fn main() {
             },
         );
 
-        let term_text_y = term_y + 16;
-        let term_text_x = term_x + 4;
+        let term_text_y = term_y + 18;
+        let term_text_x = term_x + 6;
         for row in 0..TERM_ROWS {
             let row_top = term_text_y + row as i32 * TERM_CHAR_H;
             if row_top + TERM_CHAR_H > term_y + term_h {
@@ -1173,7 +1174,7 @@ fn main() {
                         &format!("{}", ch as char),
                         term_text_x + col as i32 * TERM_CHAR_W,
                         row_top,
-                        10,
+                        TERM_FONT_SIZE,
                         t_fg,
                     );
                 }
