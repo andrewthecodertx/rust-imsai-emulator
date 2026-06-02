@@ -135,6 +135,7 @@ Options:
 | Escape    | Sends ESC (0x1B)                        |
 | Ctrl+key  | Sends control character (Ctrl+C = 0x03) |
 | Ctrl+]    | Exit emulator                           |
+| Ctrl+K    | Command mode (load, mount, program, go, reset, quit) |
 
 ## Known Limitations
 

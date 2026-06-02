@@ -381,8 +381,120 @@ fn run_diag(emu: &mut rust_imsai_emulator::Imsai8080, max: u64) {
     }
 }
 
+/// Local command mode: pauses CPU, lets user load programs/disks, then resumes.
+fn handle_command_mode(
+    emu: &mut rust_imsai_emulator::Imsai8080,
+    stdout: &mut io::Stdout,
+    program_name: &mut String,
+) {
+    // Leave alternate screen so we can type commands normally
+    stdout.execute(LeaveAlternateScreen).ok();
+    disable_raw_mode().ok();
+
+    println!("\r\n--- IMSAI Command Mode (Ctrl+K to re-enter, Ctrl+] to exit emulator) ---");
+    println!("Commands: load <file> [addr], mount <disk.img>, program <file.json>, go, reset, quit");
+    println!("CPU {} | PC={:04X} SP={:04X} A={:02X}", 
+        if emu.cpu.halted { "HALT" } else { "STOPPED" }, emu.cpu.pc, emu.cpu.sp, emu.cpu.a);
+
+    loop {
+        print!("> ");
+        stdout.flush().ok();
+
+        let mut input = String::new();
+        if io::stdin().read_line(&mut input).is_err() {
+            break;
+        }
+        let input = input.trim();
+        if input.is_empty() {
+            continue;
+        }
+
+        let parts: Vec<&str> = input.splitn(3, ' ').collect();
+        match parts[0].to_lowercase().as_str() {
+            "load" => {
+                let path = parts.get(1);
+                let addr_str = parts.get(2);
+                if path.is_none() {
+                    println!("Usage: load <file> [addr]");
+                    continue;
+                }
+                let path = path.unwrap();
+                let addr: u16 = addr_str
+                    .and_then(|s| u16::from_str_radix(s.trim_start_matches("0x"), 16).ok())
+                    .unwrap_or(0);
+                match std::fs::read(path) {
+                    Ok(data) => {
+                        emu.load_program(addr, &data);
+                        emu.cpu.pc = addr;
+                        *program_name = format!("{} @ {:04X}", path, addr);
+                        println!("Loaded {} bytes at 0x{:04X}, PC set to 0x{:04X}", data.len(), addr, addr);
+                    }
+                    Err(e) => println!("Error loading '{}': {}", path, e),
+                }
+            }
+            "mount" => {
+                let path = parts.get(1);
+                if path.is_none() {
+                    println!("Usage: mount <disk.img>");
+                    continue;
+                }
+                match emu.bus.card_mut::<TarbellCard>().expect("Tarbell card").insert_disk(0, *path.unwrap()) {
+                    Ok(()) => println!("Disk mounted in drive A: {}", path.unwrap()),
+                    Err(e) => println!("Error mounting '{}': {}", path.unwrap(), e),
+                }
+            }
+            "program" => {
+                let path = parts.get(1);
+                if path.is_none() {
+                    println!("Usage: program <file.json>");
+                    continue;
+                }
+                let pbuf = PathBuf::from(*path.unwrap());
+                match load_program_file(&pbuf) {
+                    Ok(prog) => {
+                        let start = find_program_start(&prog).unwrap_or(0);
+                        execute_panel_program(emu, &prog);
+                        emu.cpu.pc = start;
+                        *program_name = prog.name.clone();
+                        println!("Loaded program: {} (PC=0x{:04X})", prog.name, start);
+                    }
+                    Err(e) => println!("Error: {}", e),
+                }
+            }
+            "go" | "run" => {
+                emu.cpu.halted = false;
+                println!("Resuming execution...");
+                break;
+            }
+            "reset" => {
+                *emu = rust_imsai_emulator::Imsai8080::new();
+                *program_name = String::new();
+                println!("Cold reset. Memory cleared, CPU at 0x0000.");
+            }
+            "quit" | "exit" => {
+                println!("Exiting...");
+                // Save memory and exit
+                let mem_path = std::path::Path::new("imsai_memory.json");
+                match save_memory_to_file(&emu.bus.memory().ram, mem_path) {
+                    Ok(()) => eprintln!("Memory saved to {}", mem_path.display()),
+                    Err(e) => eprintln!("Warning: failed to save {}: {}", mem_path.display(), e),
+                }
+                std::process::exit(0);
+            }
+            _ => println!("Unknown command. Type: load, mount, program, go, reset, quit"),
+        }
+    }
+
+    // Return to alternate screen for terminal mode
+    enable_raw_mode().ok();
+    stdout.execute(EnterAlternateScreen).ok();
+    print!("\r\nIMSAI 8080 Terminal\r\n---\r\n");
+    stdout.flush().ok();
+}
+
 /// Interactive terminal mode: raw terminal, real-time keyboard input, live console output.
 fn run_terminal(emu: &mut rust_imsai_emulator::Imsai8080) {
+    let mut program_name = String::new();
     // Try to enable raw mode; fall back to batch mode if no TTY
     if enable_raw_mode().is_err() {
         eprintln!("No TTY available, falling back to batch mode (use --batch to force)");
@@ -398,7 +510,7 @@ fn run_terminal(emu: &mut rust_imsai_emulator::Imsai8080) {
     stdout.flush().ok();
 
     // Print welcome banner
-    print!("\r\nIMSAI 8080 Terminal\r\nPress Ctrl+] to exit\r\n---\r\n");
+    print!("\r\nIMSAI 8080 Terminal\r\nPress Ctrl+] to exit, Ctrl+K for commands\r\n---\r\n");
     stdout.flush().ok();
 
     let batch_size: u64 = 5000;
@@ -463,6 +575,14 @@ fn run_terminal(emu: &mut rust_imsai_emulator::Imsai8080) {
                                 let elapsed = start_time.elapsed();
                                 print_instructions_summary(instruction_count, elapsed);
                                 return;
+                            }
+                            KeyEvent { code: KeyCode::Char('k'), modifiers: KeyModifiers::CONTROL, .. } => {
+                                // Ctrl+K: enter local command mode
+                                handle_command_mode(emu, &mut stdout, &mut program_name);
+                                // After command mode, clear the terminal line and resume
+                                print!("\r\n--- Resumed ---\r\n");
+                                stdout.flush().ok();
+                                got_key = true;
                             }
                             KeyEvent { code: KeyCode::Char(ch), modifiers: KeyModifiers::CONTROL, .. } => {
                                 // Ctrl+key: send as control character (A=0x01, B=0x02, etc.)
