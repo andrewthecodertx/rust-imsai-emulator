@@ -137,34 +137,84 @@ fn parse_hex_bytes(s: &str) -> Result<Vec<u8>, String> {
 use rust_imsai_emulator::Imsai8080;
 use rust_imsai_emulator::TarbellCard;
 use rust_imsai_emulator::cards::PanelSwitch;
-use raylib::consts::{KeyboardKey, MouseButton};
+use raylib::consts::{KeyboardKey, MouseButton, TextureFilter};
+use raylib::math::Vector2;
+use raylib::text::RaylibFont;
+use raylib::core::texture::RaylibTexture2D;
 use serde::{Deserialize, Serialize};
+
+/// Candidate system paths for the smooth branding font (first that loads wins).
+const LOGO_FONT_PATHS: &[&str] = &[
+    "/usr/share/fonts/liberation/LiberationSans-Bold.ttf",
+    "/usr/share/fonts/TTF/LiberationSans-Bold.ttf",
+    "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+    "/usr/share/fonts/TTF/Roboto-Bold.ttf",
+    "/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+];
 
 // Window size
 const W: i32 = 1280;
-const H: i32 = 860;
+const H: i32 = 840;
 
-// LED dimensions
-const LED_R: i32 = 6;    // radius of circular LEDs
-const LED_GAP: i32 = 26; // center-to-center spacing
+// === IMSAI 8080 front panel layout ===
+// The real panel is a black face. LEDs and switches are organized into two
+// 8-bit byte-blocks (A15-A8 left, A7-A0 right) separated by a central seam,
+// with the IMSAI logo and the control switches on the right.
+const PX: i32 = 16;   // panel left
+const PY: i32 = 12;   // panel top
+const PW: i32 = 1248; // panel width
+const PH: i32 = 360;  // panel height
 
-// Switch dimensions (IMSAI paddle toggles)
-const SW_W: i32 = 16;
-const SW_H: i32 = 50;
-const SW_GAP: i32 = 27;
-const SW_PADDLE_H: i32 = 20; // visible paddle height
-const SW_PLATE_H: i32 = 4;   // tip cap thickness
+// Column geometry shared by LED rows and the switch row.
+const COL_STEP: i32 = 34;   // center-to-center within a nibble
+const NIBBLE_GAP: i32 = 16; // extra gap between the two nibbles of a byte
+const LBYTE_X0: i32 = PX + 56;  // center of MSB (leftmost) LED, left byte
+const RBYTE_X0: i32 = PX + 474; // center of MSB LED, right byte
 
-// Button dimensions
-const BTN_W: i32 = 76;
-const BTN_H: i32 = 32;
-const BTN_GAP: i32 = 8;
+// LED row baselines (vertical centers).
+const Y_PROG: i32 = PY + 96;  // PROGRAMMED OUTPUT
+const Y_STAT: i32 = PY + 166; // STATUS BYTE (left) + DATA BUS (right)
+const Y_ADDR: i32 = PY + 236; // ADDRESS BUS (16) + mode LEDs (right)
+const Y_SW: i32 = PY + 290;   // switch row top edge
+
+const LED_RAD: f32 = 7.0;
+
+// Paddle switch dimensions.
+const PADDLE_W: i32 = 24;
+const PADDLE_H: i32 = 50;
+
+// Control switches (right cluster): EXAMINE, DEPOSIT, RESET, RUN, STEP, PWR.
+// Grouped into a cluster, spaced enough for the word labels to stay readable.
+const CTRL_STEP: i32 = 54;
+const CTRL_X0: i32 = PX + 899; // center of first control paddle
 
 // Terminal dimensions
 const TERM_COLS: usize = 80;
 const TERM_ROWS: usize = 24;
 const TERM_CHAR_W: i32 = 7;
 const TERM_CHAR_H: i32 = 12;
+
+/// X center of address bit `i` (0 = MSB/bit15, 15 = LSB/bit0) in the LED/switch grid.
+fn addr_col_x(i: usize) -> i32 {
+    if i < 8 {
+        LBYTE_X0 + i as i32 * COL_STEP + if i >= 4 { NIBBLE_GAP } else { 0 }
+    } else {
+        let j = i - 8;
+        RBYTE_X0 + j as i32 * COL_STEP + if j >= 4 { NIBBLE_GAP } else { 0 }
+    }
+}
+
+/// X center of a byte-block bit `j` (0 = MSB) for the single-byte rows
+/// (programmed output uses the left block, data bus uses the right block).
+fn byte_col_x(block_x0: i32, j: usize) -> i32 {
+    block_x0 + j as i32 * COL_STEP + if j >= 4 { NIBBLE_GAP } else { 0 }
+}
+
+/// X center of control paddle `i` (0..6).
+fn ctrl_col_x(i: usize) -> i32 {
+    CTRL_X0 + i as i32 * CTRL_STEP
+}
 
 /// UART test program: initializes 8251A and prints 'A' forever.
 const UART_TEST: [u8; 15] = [
@@ -213,10 +263,25 @@ fn main() {
 
     rl.set_target_fps(30);
 
+    // Smooth TTF font for the IMSAI 8080 branding (the default raylib bitmap
+    // font is blocky when scaled up). Falls back to the bitmap font if no
+    // system TTF is found. Loaded oversized + bilinear-filtered so it stays
+    // crisp at the logo and subtitle sizes.
+    let logo_font = LOGO_FONT_PATHS
+        .iter()
+        .find_map(|p| rl.load_font_ex(&thread, p, 96, None).ok());
+    if let Some(ref f) = logo_font {
+        f.texture().set_texture_filter(&thread, TextureFilter::TEXTURE_FILTER_BILINEAR);
+    }
+
     let mut emu = Imsai8080::new();
+    // The 16 sense switches set the address; the low 8 also serve as the
+    // data byte for DEPOSIT (exactly as on the real IMSAI front panel).
     let mut addr_sw = [false; 16];
-    let mut data_sw = [false; 8];
     let mut program_name = String::new(); // shown in UI
+    let shot_arg = args.iter().position(|a| a == "--shot")
+        .and_then(|i| args.get(i + 1).cloned());
+    let mut frame: u64 = 0;
 
     // Load program/disk based on arguments. All modes start STOPPED.
     // The user presses F5 or clicks RUN/STOP to begin execution.
@@ -292,90 +357,72 @@ fn main() {
     let mut status_msg_timer: i32 = 0; // frames remaining
     let mut picker = PickerState::Closed;
 
-    // Colors - IMSAI warm aluminum/chassis palette
-    let bg        = raylib::color::Color { r: 20, g: 20, b: 24, a: 255 };   // dark surround
-    let panel_bg  = raylib::color::Color { r: 180, g: 175, b: 162, a: 255 };  // warm aluminum
-    let _panel_bg2 = raylib::color::Color { r: 165, g: 160, b: 148, a: 255 };  // slightly darker accent
-    let panel_edge= raylib::color::Color { r: 100, g: 96, b: 85, a: 255 };   // panel border/bevel
-    let led_on    = raylib::color::Color { r: 255, g: 40, b: 30, a: 255 };   // IMSAI red LED
-    let led_off   = raylib::color::Color { r: 50, g: 45, b: 42, a: 255 };   // dark LED (off)
-    let led_glow  = raylib::color::Color { r: 255, g: 80, b: 60, a: 80 };   // LED glow halo
-    let led_red   = raylib::color::Color { r: 255, g: 50, b: 20, a: 255 };   // status LED (same red)
-    // Switch colors: paddle is dark metal, slot is black recess
-    let sw_paddle = raylib::color::Color { r: 55, g: 55, b: 58, a: 255 };   // dark metal paddle
-    let sw_paddle_hi = raylib::color::Color { r: 80, g: 80, b: 84, a: 255 }; // paddle highlight
-    let sw_paddle_lo = raylib::color::Color { r: 30, g: 30, b: 32, a: 255 }; // paddle shadow
-    let sw_slot   = raylib::color::Color { r: 10, g: 10, b: 12, a: 255 };    // deep black slot
-    let sw_slot_rim = raylib::color::Color { r: 70, g: 68, b: 62, a: 255 };  // slot chrome rim
-    let sw_tip_on  = raylib::color::Color { r: 220, g: 50, b: 30, a: 255 };  // red tip for ON (up)
-    let sw_tip_off = raylib::color::Color { r: 35, g: 35, b: 38, a: 255 };   // dark tip for OFF (down)
-    let txt       = raylib::color::Color { r: 30, g: 25, b: 20, a: 255 };   // dark text on aluminum
-    let txt_dim   = raylib::color::Color { r: 80, g: 76, b: 68, a: 255 };   // dim text on aluminum
-    let txt_bright= raylib::color::Color { r: 20, g: 18, b: 14, a: 255 };   // bright label text
-    let t_fg      = raylib::color::Color { r: 50, g: 255, b: 50, a: 255 };  // green CRT text
-    let t_bg      = raylib::color::Color { r: 8, g: 16, b: 8, a: 255 };    // CRT background
-    let _border    = raylib::color::Color { r: 60, g: 58, b: 52, a: 255 };   // border lines
-    // Momentary pushbutton colors (silver/chrome buttons)
-    let mom_face  = raylib::color::Color { r: 155, g: 150, b: 140, a: 255 };
-    let mom_hi    = raylib::color::Color { r: 190, g: 185, b: 175, a: 255 };
-    let mom_lo    = raylib::color::Color { r: 90, g: 86, b: 78, a: 255 };
-    let mom_text  = raylib::color::Color { r: 20, g: 18, b: 14, a: 255 };
+    // Colors - IMSAI 8080: black panel face, white silk-screen text,
+    // red LEDs, blue/red paddle switches, gray chassis surround.
+    let rgb = |r, g, b| raylib::color::Color { r, g, b, a: 255 };
+    let rgba = |r, g, b, a| raylib::color::Color { r, g, b, a };
+    let bg        = rgb(78, 78, 82);     // gray chassis around the panel
+    let panel_bg  = rgb(12, 12, 14);     // black panel face
+    let panel_edge= rgb(38, 38, 42);     // panel inner bevel
+    let led_on    = rgb(255, 60, 42);    // lit red LED
+    let led_off   = rgb(46, 12, 10);     // dark (off) red LED
+    let led_glow  = rgba(255, 80, 50, 70); // LED glow halo
+    let txt       = rgb(232, 232, 232);  // white silk-screen label
+    let txt_dim   = rgb(150, 150, 154);  // dim label
+    let txt_bright= rgb(245, 245, 245);  // bright white (logo / numbers)
+    let t_fg      = rgb(50, 255, 50);    // green CRT text
+    let t_bg      = rgb(8, 16, 8);       // CRT background
+    // Paddle switch base colors (blue = high nibble, red = low nibble).
+    let sw_blue   = rgb(78, 104, 188);
+    let sw_red    = rgb(196, 58, 44);
 
-    // Layout: Panel takes upper portion, CRT terminal below
-    // Panel area: full width, y=0 to panel_bottom
-    // CRT terminal: full width, below panel
-    let panel_x: i32 = 8;               // panel left margin
-    let panel_y: i32 = 4;                // panel top margin
-    let panel_w: i32 = W - 16;           // panel width (almost full)
-    let panel_bottom: i32 = 510;         // bottom edge of front panel area
+    // Panel rectangle.
+    let panel_x: i32 = PX;
+    let panel_y: i32 = PY;
+    let panel_w: i32 = PW;
+    let panel_bottom: i32 = PY + PH;
 
     while !rl.window_should_close() {
         // ---- Input: toggle switches (suppressed when picker is open) ----
         if matches!(picker, PickerState::Closed) && rl.is_mouse_button_pressed(MouseButton::MOUSE_BUTTON_LEFT) {
             let m = rl.get_mouse_position();
 
-            // Address switches row  
-            // Layout: panel_x + 16 + i * SW_GAP, at addr_sw_y
-            let addr_sw_y: f32 = 228.0;
+            // Helper: did the click land on the paddle centered at column `cx`?
+            let hit_paddle = |cx: i32| -> bool {
+                let left = (cx - PADDLE_W / 2) as f32;
+                m.x >= left && m.x < left + PADDLE_W as f32
+                    && m.y >= Y_SW as f32 && m.y < (Y_SW + PADDLE_H) as f32
+            };
+
+            // 16 address/data sense switches. Click upper half = set (1),
+            // lower half = clear (0); a click anywhere just toggles.
             for i in 0..16usize {
-                let x = (panel_x + 16 + i as i32 * SW_GAP) as f32;
-                let w = SW_W as f32;
-                let h = SW_H as f32;
-                if m.x >= x && m.x < x + w && m.y >= addr_sw_y && m.y < addr_sw_y + h {
-                    addr_sw[i] = !addr_sw[i];
+                if hit_paddle(addr_col_x(i)) {
+                    addr_sw[i] = m.y < (Y_SW + PADDLE_H / 2) as f32;
                 }
             }
 
-            // Data switches row
-            let data_sw_y: f32 = 305.0;
-            for i in 0..8usize {
-                let x = (panel_x + 16 + i as i32 * SW_GAP) as f32;
-                if m.x >= x && m.x < x + SW_W as f32 && m.y >= data_sw_y && m.y < data_sw_y + SW_H as f32 {
-                    data_sw[i] = !data_sw[i];
-                }
-            }
-
-            // Function controls at ctrl_y
-            let ctrl_y: i32 = 380;
-            // RUN/STOP toggle switch
-            let runstop_x = panel_x + 16;
-            if m.x >= runstop_x as f32 && m.x < (runstop_x + SW_W) as f32
-                && m.y >= ctrl_y as f32 && m.y < (ctrl_y + SW_H) as f32 {
-                emu.panel.press_switch(PanelSwitch::RunStop);
-            }
-
-            // Momentary buttons (STEP, EXAM, DEP, EX NXT, DEP NXT)
-            let mom_start_x = (panel_x + 16 + SW_W + 16) as i32;
-            let mom_actions = [PanelSwitch::SingleStep, PanelSwitch::Examine,
-                               PanelSwitch::Deposit, PanelSwitch::ExamineNext,
-                               PanelSwitch::DepositNext];
-            for (i, action) in mom_actions.iter().enumerate() {
-                let x = (mom_start_x + i as i32 * (BTN_W + BTN_GAP)) as f32;
-                if m.x >= x && m.x < x + BTN_W as f32 && m.y >= ctrl_y as f32 && m.y < (ctrl_y + BTN_H) as f32 {
-                    if *action == PanelSwitch::SingleStep {
-                        step_pending = true;
-                    } else {
-                        emu.panel.press_switch(*action);
+            // Control cluster (6 paddles). Each control has an "up" action
+            // (top label) and a "down" action (bottom label). We decide which
+            // by whether the click landed in the top or bottom half.
+            let up = m.y < (Y_SW + PADDLE_H / 2) as f32;
+            for i in 0..6usize {
+                let cx = ctrl_col_x(i);
+                let left = (cx - PADDLE_W / 2) as f32;
+                if m.x >= left && m.x < left + PADDLE_W as f32
+                    && m.y >= Y_SW as f32 && m.y < (Y_SW + PADDLE_H) as f32
+                {
+                    match i {
+                        0 => emu.panel.press_switch(if up { PanelSwitch::Examine } else { PanelSwitch::ExamineNext }),
+                        1 => emu.panel.press_switch(if up { PanelSwitch::Deposit } else { PanelSwitch::DepositNext }),
+                        2 => {
+                            // RESET (up) / EXT.CLR (down): restart CPU at 0
+                            emu.cpu.pc = 0;
+                        }
+                        3 => emu.panel.press_switch(PanelSwitch::RunStop), // RUN (up) / STOP (down)
+                        4 => step_pending = true,                          // SINGLE STEP
+                        5 => {}                                            // PWR ON/OFF (no-op)
+                        _ => {}
                     }
                 }
             }
@@ -547,7 +594,6 @@ fn main() {
             emu.panel.set_address_switches(0x0000);
             emu.process_panel();
             addr_sw = [false; 16];
-            data_sw = [false; 8];
             cycles = 0;
             term = [[0x20u8; TERM_COLS]; TERM_ROWS];
             tcx = 0;
@@ -575,8 +621,8 @@ fn main() {
         // changed them (e.g., deposit_next auto-advances the address).
         let addr_val: u16 = addr_sw.iter().enumerate()
             .fold(0u16, |a, (i, &on)| if on { a | (1 << (15 - i)) } else { a });
-        let data_val: u8 = data_sw.iter().enumerate()
-            .fold(0u8, |a, (i, &on)| if on { a | (1 << (7 - i)) } else { a });
+        // Low 8 sense switches double as the data byte (real IMSAI behavior).
+        let data_val: u8 = (addr_val & 0xFF) as u8;
         emu.panel.set_address_switches(addr_val);
         emu.panel.set_data_switches(data_val);
         emu.process_panel();
@@ -584,12 +630,8 @@ fn main() {
         // Sync visual switches from panel (catches auto-advances from
         // deposit_next, examine_next, and program loads)
         let panel_addr = emu.panel.address_switches();
-        let panel_data = emu.panel.data_switches();
         for i in 0..16 {
             addr_sw[i] = (panel_addr >> (15 - i)) & 1 != 0;
-        }
-        for i in 0..8 {
-            data_sw[i] = (panel_data >> (7 - i)) & 1 != 0;
         }
 
         if step_pending {
@@ -630,194 +672,176 @@ fn main() {
         let mut d = rl.begin_drawing(&thread);
         d.clear_background(bg);
 
-        // === IMSAI Front Panel (full-width aluminum chassis) ===
-        // Panel background with beveled edge
-        d.draw_rectangle(panel_x, panel_y, panel_w, panel_bottom, panel_bg);
-        // Inner dark border (recessed panel effect)
-        d.draw_rectangle(panel_x + 2, panel_y + 2, panel_w - 4, panel_bottom - panel_y - 4, panel_bg);
-        // Outer bevel
-        let bevel_hi = raylib::color::Color { r: 210, g: 205, b: 195, a: 255 };
-        let bevel_lo = raylib::color::Color { r: 120, g: 115, b: 105, a: 255 };
-        // Top highlight
-        d.draw_rectangle(panel_x, panel_y, panel_w, 2, bevel_hi);
-        d.draw_rectangle(panel_x, panel_y, 2, panel_bottom - panel_y, bevel_hi);
-        // Bottom shadow
-        d.draw_rectangle(panel_x, panel_y + panel_bottom - panel_y - 2, panel_w, 2, bevel_lo);
-        d.draw_rectangle(panel_x + panel_w - 2, panel_y, 2, panel_bottom - panel_y, bevel_lo);
+        // === IMSAI 8080 front panel (black face) ===
+        let leds = emu.panel.leds();
 
-        // Title bar: IMSAI 8080 badge
-        d.draw_text("IMSAI 8080", panel_x + 14, panel_y + 8, 24, txt_bright);
-        let state_str = if emu.panel.is_running() { "RUNNING" } else { "STOPPED" };
-        let state_col = if emu.panel.is_running() { led_on } else { led_red };
-        d.draw_text(state_str, panel_x + 240, panel_y + 12, 18, state_col);
-        d.draw_text(&format!("Cycles: {}", cycles), panel_x + 400, panel_y + 14, 11, txt_dim);
-        if !program_name.is_empty() {
-            d.draw_text(&program_name, panel_x + 14, panel_y + 36, 11, txt_dim);
+        // Panel face with a thin raised bevel against the gray chassis.
+        d.draw_rectangle(panel_x - 3, panel_y - 3, panel_w + 6, PH + 6, rgb(150, 150, 154));
+        d.draw_rectangle(panel_x, panel_y, panel_w, PH, panel_bg);
+        d.draw_rectangle_lines(panel_x, panel_y, panel_w, PH, panel_edge);
+
+        // Decorative mounting screws (corners + mid-edges).
+        for &(sx, sy) in &[
+            (panel_x + 22, panel_y + 110), (panel_x + 22, panel_y + 270),
+            (panel_x + panel_w - 22, panel_y + 110), (panel_x + panel_w - 22, panel_y + 270),
+            (PX + 452, panel_y + 270), (PX + 770, panel_y + 270),
+        ] {
+            draw_screw(&mut d, sx, sy);
         }
 
-        // Status message (fades out over panel)
+        // --- IMSAI 8080 logo (top right) ---
+        // "IMSAI 8080" with a rule beneath it that leads into "MICROCOMPUTER
+        // SYSTEM", which sits at the right end on the same line level.
+        let big = "IMSAI  8080";
+        let sub = "MICROCOMPUTER SYSTEM";
+        let right_edge = PX + PW - 28;
+        let big_y = PY + 14;
+        if let Some(ref f) = logo_font {
+            // Smooth scalable font.
+            let big_size = 52.0_f32;
+            let big_sp = 4.0;
+            let big_w = f.measure_text(big, big_size, big_sp).x;
+            let big_x = right_edge as f32 - big_w;
+            d.draw_text_ex(f, big, Vector2::new(big_x, big_y as f32), big_size, big_sp, txt_bright);
+
+            let sub_size = 15.0_f32;
+            let sub_sp = 1.5;
+            let sub_w = f.measure_text(sub, sub_size, sub_sp).x;
+            let sub_x = right_edge as f32 - sub_w;
+            let line_y = big_y + big_size as i32 + 5;
+            d.draw_rectangle(big_x as i32 + 2, line_y, (sub_x as i32 - 10) - (big_x as i32 + 2), 2, txt_bright);
+            d.draw_text_ex(f, sub, Vector2::new(sub_x, (line_y - 8) as f32), sub_size, sub_sp, txt);
+        } else {
+            // Fallback: built-in bitmap font.
+            let big_size = 54;
+            let big_w = d.measure_text(big, big_size);
+            let big_x = right_edge - big_w;
+            d.draw_text(big, big_x, big_y, big_size, txt_bright);
+            let sub_size = 13;
+            let sub_w = d.measure_text(sub, sub_size);
+            let sub_x = right_edge - sub_w;
+            let line_y = big_y + big_size + 2;
+            d.draw_rectangle(big_x + 2, line_y, (sub_x - 10) - (big_x + 2), 2, txt_bright);
+            d.draw_text(sub, sub_x, line_y - 6, sub_size, txt);
+        }
+
+        // ---------------------------------------------------------------
+        // Row 1: PROGRAMMED OUTPUT (left byte block) -- not modeled, off.
+        // ---------------------------------------------------------------
+        for j in 0..8usize {
+            let cx = byte_col_x(LBYTE_X0, j);
+            d.draw_text(&format!("{}", 7 - j), cx - 3, Y_PROG - 26, 12, txt);
+            draw_led(&mut d, cx, Y_PROG, false, led_on, led_off, led_glow);
+        }
+        d.draw_text("PROGRAMMED", PX + 332, Y_PROG - 14, 12, txt);
+        d.draw_text("OUTPUT", PX + 332, Y_PROG + 2, 12, txt);
+
+        // ---------------------------------------------------------------
+        // Row 2: STATUS BYTE (left) + DATA BUS (right)
+        // ---------------------------------------------------------------
+        let status = [
+            ("MEMR", leds.memr), ("INP", leds.ior), ("M1", leds.m1), ("OUT", leds.iow),
+            ("HLTA", false), ("STACK", false), ("WO", leds.mwrt), ("INTA", leds.int),
+        ];
+        for (j, (lbl, on)) in status.iter().enumerate() {
+            let cx = byte_col_x(LBYTE_X0, j);
+            let lw = d.measure_text(lbl, 9);
+            d.draw_text(lbl, cx - lw / 2, Y_STAT - 24, 9, txt);
+            draw_led(&mut d, cx, Y_STAT, *on, led_on, led_off, led_glow);
+        }
+        d.draw_text("STATUS", PX + 332, Y_STAT - 14, 12, txt);
+        d.draw_text("BYTE", PX + 332, Y_STAT + 2, 12, txt);
+        for j in 0..8usize {
+            let cx = byte_col_x(RBYTE_X0, j);
+            d.draw_text(&format!("{}", 7 - j), cx - 3, Y_STAT - 24, 12, txt);
+            draw_led(&mut d, cx, Y_STAT, leds.data[j], led_on, led_off, led_glow);
+        }
+        d.draw_text("DATA", PX + 748, Y_STAT - 14, 12, txt);
+        d.draw_text("BUS", PX + 748, Y_STAT + 2, 12, txt);
+
+        // ---------------------------------------------------------------
+        // Row 3: ADDRESS BUS (16 LEDs) with hex weight markers + mode LEDs.
+        // ---------------------------------------------------------------
+        for i in 0..16usize {
+            let cx = addr_col_x(i);
+            // Hex weight per nibble: 8 4 2 1.
+            let weight = [8, 4, 2, 1][i % 4];
+            d.draw_text(&format!("{}", weight), cx - 3, Y_ADDR - 24, 11, txt_dim);
+            draw_led(&mut d, cx, Y_ADDR, leds.address[i], led_on, led_off, led_glow);
+        }
+        d.draw_text("ADDRESS", PX + 332, Y_ADDR - 14, 12, txt);
+        d.draw_text("BUS", PX + 332, Y_ADDR + 2, 12, txt);
+        d.draw_text("HEXADECIMAL", PX + 748, Y_ADDR - 26, 11, txt);
+        d.draw_text("ADDRESS", PX + 748, Y_ADDR - 12, 12, txt);
+        d.draw_text("BUS", PX + 748, Y_ADDR + 3, 12, txt);
+
+        // Mode LEDs (right): INTERRUPTS ENABLED, RUN, WAIT, HOLD.
+        let modes = [
+            ("INTE", false), ("RUN", leds.run), ("WAIT", leds.wait), ("HOLD", leds.hlda),
+        ];
+        for (k, (lbl, on)) in modes.iter().enumerate() {
+            let cx = ctrl_col_x(2 + k);
+            let lw = d.measure_text(lbl, 10);
+            d.draw_text(lbl, cx - lw / 2, Y_ADDR - 24, 10, txt);
+            draw_led(&mut d, cx, Y_ADDR, *on, led_on, led_off, led_glow);
+        }
+
+        // ---------------------------------------------------------------
+        // Switch row: 16 sense switches + 6 control paddles.
+        // ---------------------------------------------------------------
+        for i in 0..16usize {
+            let cx = addr_col_x(i);
+            d.draw_text(&format!("{}", 15 - i), cx - 4, Y_SW - 16, 10, txt);
+            let base = if (i % 8) < 4 { sw_blue } else { sw_red };
+            draw_paddle(&mut d, cx, Y_SW, base, addr_sw[i], panel_bg);
+        }
+        // Group labels under the two sense-switch byte blocks.
+        let lbl1 = "ADDRESS - PROGRAMMED INPUT";
+        let c1 = (byte_col_x(LBYTE_X0, 0) + byte_col_x(LBYTE_X0, 7)) / 2;
+        let w1 = d.measure_text(lbl1, 10);
+        d.draw_text(lbl1, c1 - w1 / 2, Y_SW + PADDLE_H + 4, 10, txt);
+        let lbl2 = "ADDRESS - DATA";
+        let c2 = (byte_col_x(RBYTE_X0, 0) + byte_col_x(RBYTE_X0, 7)) / 2;
+        let w2 = d.measure_text(lbl2, 10);
+        d.draw_text(lbl2, c2 - w2 / 2, Y_SW + PADDLE_H + 4, 10, txt);
+
+        // Control paddles: (top label / bottom label, base color, up-state).
+        let running_now = emu.panel.is_running();
+        let controls: [(&str, &str, raylib::color::Color, bool); 6] = [
+            ("EXAMINE", "EX NEXT", sw_blue, false),
+            ("DEPOSIT", "DEP NEXT", sw_red, false),
+            ("RESET", "EXT CLR", sw_blue, false),
+            ("RUN", "STOP", sw_blue, running_now),
+            ("SINGLE", "STEP", sw_blue, false),
+            ("PWR ON", "PWR OFF", sw_red, true),
+        ];
+        for (i, (top, bot, base, up)) in controls.iter().enumerate() {
+            let cx = ctrl_col_x(i);
+            let tw = d.measure_text(top, 8);
+            d.draw_text(top, cx - tw / 2, Y_SW - 14, 8, txt);
+            draw_paddle(&mut d, cx, Y_SW, *base, *up, panel_bg);
+            let bw = d.measure_text(bot, 8);
+            d.draw_text(bot, cx - bw / 2, Y_SW + PADDLE_H + 4, 8, txt);
+        }
+
+        // Transient status message over the panel (load/save feedback).
         if status_msg_timer > 0 {
-            let alpha = if status_msg_timer < 30 { status_msg_timer * 8 } else { 255 }.min(255) as u8;
-            let msg_col = raylib::color::Color { r: 40, g: 20, b: 10, a: alpha };
-            d.draw_text(&status_msg, panel_x + 14, panel_y + panel_bottom - panel_y - 22, 11, msg_col);
+            let alpha = (if status_msg_timer < 30 { status_msg_timer * 8 } else { 255 }).min(255) as u8;
+            d.draw_text(&status_msg, PX + 24, PY + PH - 18, 12, rgba(255, 180, 120, alpha));
             status_msg_timer -= 1;
         }
 
-        // Section separator line under title
-        let sep_y = panel_y + 50;
-        d.draw_rectangle(panel_x + 8, sep_y, panel_w - 16, 1, panel_edge);
-
-        // === Address LEDs (y = 70) ===
-        let addr_led_y: i32 = 70;
-        d.draw_text("ADDRESS", panel_x + 14, addr_led_y - 14, 11, txt_bright);
-        let leds = emu.panel.leds();
-        for i in 0..16usize {
-            let x = panel_x + 14 + (15 - i) as i32 * LED_GAP;
-            let on = leds.address[i];
-            // Draw circular LED with glow
-            if on {
-                d.draw_circle(x + LED_R, addr_led_y + LED_R, (LED_R + 4) as f32, led_glow);
-            }
-            d.draw_circle(x + LED_R, addr_led_y + LED_R, LED_R as f32, if on { led_on } else { led_off });
-            d.draw_circle_lines(x + LED_R, addr_led_y + LED_R, LED_R as f32, panel_edge);
-            // Bit number labels every 4 bits
-            if i % 4 == 0 {
-                d.draw_text(&format!("{}", 15 - i), x, addr_led_y + LED_R * 2 + 3, 8, txt_dim);
-            }
-            // Group separator lines every 4 bits
-            if i > 0 && i % 4 == 0 {
-                let sep_x = x - LED_GAP / 2;
-                d.draw_rectangle(sep_x, addr_led_y - 2, 1, LED_R * 2 + 4, panel_edge);
-            }
-        }
-        d.draw_text(&format!("= {:04X}", addr_val), panel_x + 14 + 16 * LED_GAP + 8, addr_led_y + 1, 13, txt_bright);
-
-        // === Data LEDs (y = 125) ===
-        let data_led_y: i32 = 125;
-        d.draw_text("DATA", panel_x + 14, data_led_y - 14, 11, txt_bright);
-        for i in 0..8usize {
-            let x = panel_x + 14 + (7 - i) as i32 * LED_GAP;
-            let on = leds.data[i];
-            if on {
-                d.draw_circle(x + LED_R, data_led_y + LED_R, (LED_R + 4) as f32, led_glow);
-            }
-            d.draw_circle(x + LED_R, data_led_y + LED_R, LED_R as f32, if on { led_on } else { led_off });
-            d.draw_circle_lines(x + LED_R, data_led_y + LED_R, LED_R as f32, panel_edge);
-        }
-        // Group separator between high and low nibble
-        let nib_sep = panel_x + 14 + 4 * LED_GAP;
-        d.draw_rectangle(nib_sep - LED_GAP / 2, data_led_y - 2, 1, LED_R * 2 + 4, panel_edge);
-        d.draw_text(&format!("= {:02X}", data_val), panel_x + 14 + 8 * LED_GAP + 8, data_led_y + 1, 13, txt_bright);
-
-        // === Status LEDs (y = 178) ===
-        let status_y: i32 = 178;
-        d.draw_text("STATUS", panel_x + 14, status_y - 14, 11, txt_bright);
-        let status = [
-            ("RUN", leds.run, led_on), ("M1", leds.m1, led_on),
-            ("WAIT", leds.wait, led_red), ("MEMR", leds.memr, led_on),
-            ("MWRT", leds.mwrt, led_red), ("IOR", leds.ior, led_on),
-            ("IOW", leds.iow, led_on), ("PWR", leds.power, led_on),
-        ];
-        for (i, (lbl, on, oc)) in status.iter().enumerate() {
-            let x = panel_x + 14 + i as i32 * 70;
-            if *on {
-                d.draw_circle(x + 6, status_y + 6, 10.0_f32, led_glow);
-            }
-            d.draw_circle(x + 6, status_y + 6, 6.0_f32, if *on { *oc } else { led_off });
-            d.draw_circle_lines(x + 6, status_y + 6, 6.0_f32, panel_edge);
-            d.draw_text(lbl, x + 16, status_y, 9, txt);
-        }
-
-        // Separator before switches
-        let sep2_y: i32 = 205;
-        d.draw_rectangle(panel_x + 8, sep2_y, panel_w - 16, 1, panel_edge);
-
-        // === Address switches (y = 228) ===
-        let addr_sw_y: i32 = 228;
-        d.draw_text(&format!("ADDR {:04X}", addr_val), panel_x + 14, addr_sw_y - 14, 13, txt_bright);
-        // Bit labels above switches
-        for i in 0..16usize {
-            let x = panel_x + 16 + i as i32 * SW_GAP;
-            let bit_num = 15 - i;
-            d.draw_text(&format!("{}", bit_num), x + 1, addr_sw_y - 6, 7, txt_dim);
-        }
-        for i in 0..16usize {
-            let x = panel_x + 16 + i as i32 * SW_GAP;
-            draw_toggle_switch(&mut d, x, addr_sw_y, SW_W, SW_H, SW_PADDLE_H, SW_PLATE_H,
-                addr_sw[i], sw_slot, sw_slot_rim, sw_paddle, sw_paddle_hi, sw_paddle_lo,
-                sw_tip_on, sw_tip_off);
-        }
-
-        // === Data switches (y = 305) ===
-        let data_sw_draw_y: i32 = 305;
-        d.draw_text(&format!("DATA {:02X}", data_val), panel_x + 14, data_sw_draw_y - 14, 13, txt_bright);
-        // Bit labels above switches
-        for i in 0..8usize {
-            let x = panel_x + 16 + i as i32 * SW_GAP;
-            let bit_num = 7 - i;
-            d.draw_text(&format!("{}", bit_num), x + 3, data_sw_draw_y - 6, 7, txt_dim);
-        }
-        for i in 0..8usize {
-            let x = panel_x + 16 + i as i32 * SW_GAP;
-            draw_toggle_switch(&mut d, x, data_sw_draw_y, SW_W, SW_H, SW_PADDLE_H, SW_PLATE_H,
-                data_sw[i], sw_slot, sw_slot_rim, sw_paddle, sw_paddle_hi, sw_paddle_lo,
-                sw_tip_on, sw_tip_off);
-        }
-
-        // Separator before controls
-        let sep3_y: i32 = data_sw_draw_y + SW_H + 10;
-        d.draw_rectangle(panel_x + 8, sep3_y, panel_w - 16, 1, panel_edge);
-
-        // === Function controls (y = 380) ===
-        let ctrl_y: i32 = 380;
-        d.draw_text("CONTROLS", panel_x + 14, ctrl_y - 16, 11, txt_bright);
-
-        // RUN/STOP toggle switch (red paddle, shows RUN/STOP state)
-        let runstop_x = panel_x + 16;
-        draw_toggle_switch(&mut d, runstop_x, ctrl_y, SW_W, SW_H, SW_PADDLE_H, SW_PLATE_H,
-            emu.panel.is_running(), sw_slot, sw_slot_rim, sw_paddle, sw_paddle_hi, sw_paddle_lo,
-            raylib::color::Color { r: 220, g: 50, b: 30, a: 255 },  // bright red tip ON
-            sw_tip_off);
-        d.draw_text("RUN/", runstop_x - 2, ctrl_y + SW_H + 2, 8, txt_dim);
-        d.draw_text("STOP", runstop_x - 2, ctrl_y + SW_H + 12, 8, txt_dim);
-
-        // Momentary push-buttons (STEP, EXAM, DEP, EX NXT, DEP NXT)
-        let mom_labels = ["STEP", "EXAM", "DEP", "EX NXT", "DEP NXT"];
-        let mom_start_x = panel_x + 16 + SW_W + 16;
-        for (i, lbl) in mom_labels.iter().enumerate() {
-            let x = mom_start_x + i as i32 * (BTN_W + BTN_GAP);
-            // 3D raised button: highlight on top/left, shadow on bottom/right
-            d.draw_rectangle(x, ctrl_y, BTN_W, BTN_H, mom_hi);
-            d.draw_rectangle(x, ctrl_y + 2, BTN_W, BTN_H, mom_face);
-            d.draw_rectangle(x, ctrl_y + BTN_H - 2, BTN_W, 2, mom_lo);
-            d.draw_rectangle(x + BTN_W - 2, ctrl_y, 2, BTN_H, mom_lo);
-            d.draw_rectangle_lines(x, ctrl_y, BTN_W, BTN_H, panel_edge);
-            let text_w = d.measure_text(lbl, 9);
-            d.draw_text(lbl, x + (BTN_W - text_w) / 2, ctrl_y + 10, 9, mom_text);
-        }
-
-        // === Registers and memory (right side of controls row) ===
-        let reg_x = mom_start_x + 5 * (BTN_W + BTN_GAP) - BTN_GAP;
-        d.draw_text("REGISTERS", reg_x, ctrl_y - 16, 11, txt_bright);
+        // === Bottom bar: machine state + keyboard shortcuts ===
+        d.draw_rectangle(0, H - 22, W, 22, rgb(28, 28, 30));
         let cpu = &emu.cpu;
-        d.draw_text(&format!("A:{:02X} B:{:02X} C:{:02X} D:{:02X} E:{:02X}", cpu.a, cpu.b, cpu.c, cpu.d, cpu.e), reg_x, ctrl_y, 10, txt);
-        d.draw_text(&format!("H:{:02X} L:{:02X} SP:{:04X} PC:{:04X}", cpu.h, cpu.l, cpu.sp, cpu.pc), reg_x, ctrl_y + 14, 10, txt);
-        let f = &cpu.flags;
-        d.draw_text(&format!("S{} Z{} AC{} P{} CY{}", f.s as u8, f.z as u8, f.ac as u8, f.p as u8, f.cy as u8), reg_x, ctrl_y + 28, 10, txt_dim);
-
-        // Memory at PC
-        let mem_y = ctrl_y + 46;
-        d.draw_text("MEMORY AT PC", reg_x, mem_y, 10, txt_dim);
-        let pc = emu.cpu.pc;
-        for i in 0..4usize {
-            let addr = pc.wrapping_add(i as u16);
-            let val = emu.bus.mem_read(addr);
-            d.draw_text(&format!("{:04X}: {:02X}", addr, val), reg_x, mem_y + 14 + i as i32 * 13, 9, txt_dim);
-        }
-
-        // === Bottom bar: keyboard shortcuts ===
-        d.draw_rectangle(0, H - 24, W, 24, raylib::color::Color { r: 30, g: 28, b: 26, a: 255 });
-        d.draw_text("F5: Run/Stop    F2: Load Program    F3: Save    R: Reset", 12, H - 18, 11, txt_dim);
+        let state = if running_now { "RUN " } else { "STOP" };
+        let line = format!(
+            "{}  PC:{:04X} SP:{:04X} A:{:02X} BC:{:02X}{:02X} DE:{:02X}{:02X} HL:{:02X}{:02X}   {}   cyc:{}",
+            state, cpu.pc, cpu.sp, cpu.a, cpu.b, cpu.c, cpu.d, cpu.e, cpu.h, cpu.l,
+            program_name, cycles,
+        );
+        d.draw_text(&line, 10, H - 16, 11, txt_dim);
+        d.draw_text("F5 run/stop  F2 load  F3 save  R reset", W - 320, H - 16, 11, txt_dim);
 
         // === CRT Terminal display (below panel) ===
         let term_y: i32 = panel_bottom + 10;
@@ -941,49 +965,115 @@ fn main() {
         // === End picker overlay ===
 
         drop(d);
+
+        // Headless verification: after a few warm-up frames, save a screenshot
+        // and exit. (`--shot <path>`)
+        frame += 1;
+        if let Some(ref shot_path) = shot_arg {
+            if frame >= 3 {
+                rl.take_screenshot(&thread, shot_path);
+                break;
+            }
+        }
     }
 }
 
-/// Draw an IMSAI-style paddle toggle switch.
-///
-/// The switch sits in a recessed slot. When ON, the paddle flips up
-/// (paddle extends from top half of slot, red tip visible at top).
-/// When OFF, the paddle flips down (paddle extends from bottom half,
-/// dark tip visible at bottom).
-fn draw_toggle_switch(
+/// Lighten a color by `amt` (clamped to 255).
+fn lighten(c: raylib::color::Color, amt: u8) -> raylib::color::Color {
+    raylib::color::Color {
+        r: c.r.saturating_add(amt),
+        g: c.g.saturating_add(amt),
+        b: c.b.saturating_add(amt),
+        a: c.a,
+    }
+}
+
+/// Darken a color by `amt` (clamped to 0).
+fn darken(c: raylib::color::Color, amt: u8) -> raylib::color::Color {
+    raylib::color::Color {
+        r: c.r.saturating_sub(amt),
+        g: c.g.saturating_sub(amt),
+        b: c.b.saturating_sub(amt),
+        a: c.a,
+    }
+}
+
+/// Draw a round red panel LED centered at (cx, cy).
+fn draw_led(
     d: &mut raylib::drawing::RaylibDrawHandle,
-    x: i32, y: i32, w: i32, h: i32, paddle_h: i32, plate_h: i32,
-    is_on: bool,
-    slot_color: raylib::color::Color,
-    rim_color: raylib::color::Color,
-    paddle_color: raylib::color::Color,
-    paddle_hi: raylib::color::Color,
-    paddle_lo: raylib::color::Color,
-    tip_on: raylib::color::Color,
-    tip_off: raylib::color::Color,
+    cx: i32, cy: i32, on: bool,
+    on_color: raylib::color::Color,
+    off_color: raylib::color::Color,
+    glow: raylib::color::Color,
 ) {
-    // Outer slot (recessed dark rectangle with rim)
-    d.draw_rectangle(x - 1, y - 1, w + 2, h + 2, rim_color);
-    d.draw_rectangle(x, y, w, h, slot_color);
-
-    // The paddle fills half the slot vertically, positioned at top (ON) or bottom (OFF)
-    let paddle_y = if is_on { y } else { y + h - paddle_h };
-    let tip_y = if is_on { y } else { y + h - plate_h };
-
-    // Paddle body
-    d.draw_rectangle(x + 1, paddle_y + plate_h, w - 2, paddle_h - plate_h, paddle_color);
-    // Paddle highlight (left edge lighter)
-    d.draw_rectangle(x + 1, paddle_y + plate_h, 2, paddle_h - plate_h, paddle_hi);
-    // Paddle shadow (right edge darker)
-    d.draw_rectangle(x + w - 3, paddle_y + plate_h, 2, paddle_h - plate_h, paddle_lo);
-    // Top cap of paddle (the tip, colored red=ON or dark=OFF)
-    d.draw_rectangle(x + 1, tip_y, w - 2, plate_h, if is_on { tip_on } else { tip_off });
-    // Tip highlight
-    d.draw_rectangle(x + 1, tip_y, 2, plate_h, if is_on {
-        raylib::color::Color { r: 255, g: 120, b: 120, a: 255 }
+    let cxf = cx as f32;
+    let cyf = cy as f32;
+    // Dark bezel ring.
+    d.draw_circle(cx, cy, LED_RAD + 2.5, raylib::color::Color { r: 30, g: 30, b: 32, a: 255 });
+    if on {
+        d.draw_circle(cx, cy, LED_RAD + 4.0, glow);
+    }
+    d.draw_circle(cx, cy, LED_RAD, if on { on_color } else { off_color });
+    if on {
+        // Specular highlight.
+        d.draw_circle(cx - 2, cy - 2, 2.0, lighten(on_color, 90));
     } else {
-        raylib::color::Color { r: 100, g: 100, b: 100, a: 255 }
-    });
+        d.draw_circle(cxf as i32 - 2, cyf as i32 - 2, 1.5, raylib::color::Color { r: 80, g: 24, b: 20, a: 255 });
+    }
+}
+
+/// Draw a decorative chrome mounting screw centered at (cx, cy).
+fn draw_screw(d: &mut raylib::drawing::RaylibDrawHandle, cx: i32, cy: i32) {
+    d.draw_circle(cx, cy, 7.0, raylib::color::Color { r: 22, g: 22, b: 24, a: 255 });
+    d.draw_circle(cx, cy, 5.5, raylib::color::Color { r: 120, g: 120, b: 124, a: 255 });
+    d.draw_circle(cx - 1, cy - 1, 2.0, raylib::color::Color { r: 175, g: 175, b: 178, a: 255 });
+    // Slot.
+    d.draw_rectangle(cx - 4, cy - 1, 8, 2, raylib::color::Color { r: 50, g: 50, b: 52, a: 255 });
+}
+
+/// Draw an IMSAI paddle toggle switch centered horizontally on `cx`, with its
+/// top edge at `top_y`. `base` is the paddle color (blue/red); `up` tilts the
+/// glossy face toward the top (switch in the up/1 position).
+fn draw_paddle(
+    d: &mut raylib::drawing::RaylibDrawHandle,
+    cx: i32, top_y: i32,
+    base: raylib::color::Color,
+    up: bool,
+    _bezel: raylib::color::Color,
+) {
+    use raylib::math::Rectangle;
+    let w = PADDLE_W as f32;
+    let h = PADDLE_H as f32;
+    let x = (cx - PADDLE_W / 2) as f32;
+    let y = top_y as f32;
+
+    // Soft recessed shadow under the paddle (no hard outline box).
+    d.draw_rectangle_rounded(
+        Rectangle { x: x - 1.0, y: y + 2.0, width: w + 2.0, height: h },
+        0.45, 8, raylib::color::Color { r: 0, g: 0, b: 0, a: 130 },
+    );
+
+    // Paddle body: a rounded rectangle in the base color.
+    let body = Rectangle { x, y, width: w, height: h };
+    d.draw_rectangle_rounded(body, 0.4, 8, base);
+
+    // Vertical shading: the half tilted toward the viewer is brighter, the
+    // receding half darker. Up = top half forward, down = bottom half forward.
+    let light = lighten(base, 60);
+    let dark = darken(base, 60);
+    let half = (h / 2.0) - 1.0;
+    let (fwd_y, rcv_y) = if up { (y, y + h / 2.0) } else { (y + h / 2.0, y) };
+    d.draw_rectangle_rounded(
+        Rectangle { x: x + 2.0, y: rcv_y + 1.0, width: w - 4.0, height: half }, 0.5, 6, dark,
+    );
+    d.draw_rectangle_rounded(
+        Rectangle { x: x + 2.0, y: fwd_y + 1.0, width: w - 4.0, height: half }, 0.5, 6, light,
+    );
+
+    // Bright gloss band + specular highlight near the forward edge.
+    let band_y = if up { top_y + 5 } else { top_y + PADDLE_H - 12 };
+    d.draw_rectangle(cx - PADDLE_W / 2 + 4, band_y, PADDLE_W - 8, 6, lighten(base, 95));
+    d.draw_circle(cx - 4, band_y + 2, 1.8, lighten(base, 130));
 }
 
 /// Execute a front panel program: walk through each step, setting switches
