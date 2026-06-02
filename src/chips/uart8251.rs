@@ -19,6 +19,9 @@
 //!
 //! The 8251A distinguishes between mode, command, and sync bytes using an
 //! internal state machine triggered by the reset sequence.
+//!
+//! References:
+//! - Wikipedia: <https://en.wikipedia.org/wiki/8251>
 
 use crate::io::Keyboard;
 
@@ -95,28 +98,28 @@ pub struct Uart8251 {
     /// Internal programming state
     state: UartState,
 
-    // Mode instruction fields (set once after reset)
+    /// Mode instruction fields (set once after reset)
     baud_divisor: BaudDivisor,
     char_length: CharLength,
     parity: Parity,
     stop_bits: StopBits,
 
-    // Command instruction state
+    /// Command instruction state
     tx_enabled: bool,
     rx_enabled: bool,
     dtr: bool,
     rts: bool,
     send_break: bool,
 
-    // Status register
+    /// Status register
     status: u8,
 
-    // TX data buffer (one byte deep in the real chip)
+    /// TX data buffer (one byte deep in the real chip)
     tx_data: Option<u8>,
     /// Whether TX buffer has been read by the bus (simulates TX shift register empty)
     tx_draining: bool,
 
-    // RX data buffer (one byte deep in the real chip, with RxFIFO of 1)
+    /// RX data buffer (one byte deep in the real chip, with RxFIFO of 1)
     rx_data: Option<u8>,
 
     /// Connection to the host keyboard (for console input)
@@ -190,7 +193,6 @@ impl Uart8251 {
     pub fn read_data(&mut self) -> u8 {
         if let Some(data) = self.rx_data.take() {
             self.status &= !STATUS_RX_READY;
-            // Clear overrun error when data is read
             self.status &= !STATUS_OVERRUN_ERR;
             data
         } else {
@@ -215,7 +217,6 @@ impl Uart8251 {
         self.status &= !STATUS_TX_READY;
         self.status &= !STATUS_TX_EMPTY;
         self.tx_draining = false;
-        // Buffer the output for the host to read
         self.output_buffer.push(value);
     }
 
@@ -245,7 +246,6 @@ impl Uart8251 {
     /// Bit  5   - Parity type: 0=odd, 1=even (only if enabled)
     /// Bits 7:6 - Stop bits: 00=invalid, 01=1, 10=1.5, 11=2
     fn write_mode(&mut self, value: u8) {
-        // Baud rate divisor
         self.baud_divisor = match value & 0x03 {
             0 => BaudDivisor::Sync,  // Sync mode (not fully supported)
             1 => BaudDivisor::Sync,  // X1 in real hardware, treat as sync
@@ -254,7 +254,6 @@ impl Uart8251 {
             _ => unreachable!(),
         };
 
-        // Character length
         self.char_length = match (value >> 2) & 0x03 {
             0 => CharLength::Bits5,
             1 => CharLength::Bits6,
@@ -263,14 +262,12 @@ impl Uart8251 {
             _ => unreachable!(),
         };
 
-        // Parity
         if value & 0x10 != 0 {
             self.parity = if value & 0x20 != 0 { Parity::Even } else { Parity::Odd };
         } else {
             self.parity = Parity::None;
         }
 
-        // Stop bits
         self.stop_bits = match (value >> 6) & 0x03 {
             0 => StopBits::Invalid, // Illegal in async mode
             1 => StopBits::One,

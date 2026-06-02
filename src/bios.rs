@@ -18,6 +18,9 @@
 //! | 0xFA00    | BIOS jump table (17 × 3-byte JMP entries)   |
 //! | 0xFA33+   | BIOS routines                                |
 //! | 0xFB20+   | DPH, DIRBUF, CSV, ALV, DPB, skew table      |
+//!
+//! References:
+//! - CP/M 2.2 BIOS entry-point spec: <https://www.seasip.info/Cpm/bios.html>
 
 use crate::bus::ImsaiBus;
 

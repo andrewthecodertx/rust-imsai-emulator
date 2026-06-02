@@ -23,6 +23,9 @@
 //! - Type II: READ_SECTOR, WRITE_SECTOR
 //! - Type III: READ_ADDRESS, READ_TRACK, WRITE_TRACK
 //! - Type IV: FORCE_INTERRUPT
+//!
+//! References:
+//! - Wikipedia: <https://en.wikipedia.org/wiki/FD1771>
 
 use crate::disk::DiskImage;
 
