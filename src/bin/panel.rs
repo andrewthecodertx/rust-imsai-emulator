@@ -9,10 +9,10 @@
 //!   imsai-panel --load <file> [addr]  Load binary at address (default 0x0000)
 //!   imsai-panel --disk <file>         Load disk image and boot CP/M
 
+use raylib::prelude::RaylibDraw;
 use std::env;
 use std::fs;
 use std::path::PathBuf;
-use raylib::prelude::RaylibDraw;
 
 /// State for the in-app file picker overlay.
 #[derive(Debug)]
@@ -26,10 +26,7 @@ enum PickerState {
         selected: i32,
     },
     /// Save picker: showing filename prompt.
-    Save {
-        filename: String,
-        cursor_blink: i32,
-    },
+    Save { filename: String, cursor_blink: i32 },
 }
 
 /// Action to take after the picker match block (avoids borrow conflicts).
@@ -84,22 +81,22 @@ struct PanelProgram {
 }
 
 fn default_programs_dir() -> PathBuf {
-    // Look for PROGRAMS/ relative to current working directory first,
+    // Look for programs/ relative to current working directory first,
     // then relative to the executable directory
     let cwd = PathBuf::from(".");
-    let cwd_prog = cwd.join("PROGRAMS");
+    let cwd_prog = cwd.join("programs");
     if cwd_prog.exists() {
         return cwd_prog;
     }
     if let Ok(exe) = env::current_exe() {
         if let Some(parent) = exe.parent() {
-            let exe_prog = parent.join("PROGRAMS");
+            let exe_prog = parent.join("programs");
             if exe_prog.exists() {
                 return exe_prog;
             }
         }
     }
-    PathBuf::from("PROGRAMS")
+    PathBuf::from("programs")
 }
 
 fn load_program_file(path: &PathBuf) -> Result<PanelProgram, String> {
@@ -110,10 +107,9 @@ fn load_program_file(path: &PathBuf) -> Result<PanelProgram, String> {
 }
 
 fn save_program_file(prog: &PanelProgram, path: &PathBuf) -> Result<(), String> {
-    let json = serde_json::to_string_pretty(prog)
-        .map_err(|e| format!("Failed to serialize: {}", e))?;
-    fs::write(path, json)
-        .map_err(|e| format!("Failed to write {}: {}", path.display(), e))
+    let json =
+        serde_json::to_string_pretty(prog).map_err(|e| format!("Failed to serialize: {}", e))?;
+    fs::write(path, json).map_err(|e| format!("Failed to write {}: {}", path.display(), e))
 }
 
 /// Parse a hex string like "3E" or "0x3E" into a u8.
@@ -130,17 +126,15 @@ fn parse_hex16(s: &str) -> Result<u16, String> {
 
 /// Parse a hex data string like "3E 4E D3 01" into bytes.
 fn parse_hex_bytes(s: &str) -> Result<Vec<u8>, String> {
-    s.split_whitespace()
-        .map(|b| parse_hex8(b))
-        .collect()
+    s.split_whitespace().map(|b| parse_hex8(b)).collect()
 }
-use rust_imsai_emulator::Imsai8080;
-use rust_imsai_emulator::TarbellCard;
-use rust_imsai_emulator::cards::PanelSwitch;
 use raylib::consts::{KeyboardKey, MouseButton, TextureFilter};
+use raylib::core::texture::RaylibTexture2D;
 use raylib::math::Vector2;
 use raylib::text::RaylibFont;
-use raylib::core::texture::RaylibTexture2D;
+use rust_imsai_emulator::cards::PanelSwitch;
+use rust_imsai_emulator::Imsai8080;
+use rust_imsai_emulator::TarbellCard;
 use serde::{Deserialize, Serialize};
 
 /// Candidate system paths for the smooth branding font (first that loads wins).
@@ -161,22 +155,22 @@ const H: i32 = 840;
 // The real panel is a black face. LEDs and switches are organized into two
 // 8-bit byte-blocks (A15-A8 left, A7-A0 right) separated by a central seam,
 // with the IMSAI logo and the control switches on the right.
-const PX: i32 = 16;   // panel left
-const PY: i32 = 12;   // panel top
+const PX: i32 = 16; // panel left
+const PY: i32 = 12; // panel top
 const PW: i32 = 1248; // panel width
-const PH: i32 = 360;  // panel height
+const PH: i32 = 360; // panel height
 
 // Column geometry shared by LED rows and the switch row.
-const COL_STEP: i32 = 34;   // center-to-center within a nibble
+const COL_STEP: i32 = 34; // center-to-center within a nibble
 const NIBBLE_GAP: i32 = 16; // extra gap between the two nibbles of a byte
-const LBYTE_X0: i32 = PX + 56;  // center of MSB (leftmost) LED, left byte
+const LBYTE_X0: i32 = PX + 56; // center of MSB (leftmost) LED, left byte
 const RBYTE_X0: i32 = PX + 474; // center of MSB LED, right byte
 
 // LED row baselines (vertical centers).
-const Y_PROG: i32 = PY + 96;  // PROGRAMMED OUTPUT
+const Y_PROG: i32 = PY + 96; // PROGRAMMED OUTPUT
 const Y_STAT: i32 = PY + 166; // STATUS BYTE (left) + DATA BUS (right)
 const Y_ADDR: i32 = PY + 236; // ADDRESS BUS (16) + mode LEDs (right)
-const Y_SW: i32 = PY + 290;   // switch row top edge
+const Y_SW: i32 = PY + 290; // switch row top edge
 
 const LED_RAD: f32 = 7.0;
 
@@ -218,13 +212,13 @@ fn ctrl_col_x(i: usize) -> i32 {
 
 /// UART test program: initializes 8251A and prints 'A' forever.
 const UART_TEST: [u8; 15] = [
-    0x3E, 0x4E,       // MVI A, 0x4E (8 data, no parity, 1 stop, 16x)
-    0xD3, 0x01,       // OUT 0x01  (mode command)
-    0x3E, 0x05,       // MVI A, 0x05 (TX enable, RX enable)
-    0xD3, 0x01,       // OUT 0x01  (command)
+    0x3E, 0x4E, // MVI A, 0x4E (8 data, no parity, 1 stop, 16x)
+    0xD3, 0x01, // OUT 0x01  (mode command)
+    0x3E, 0x05, // MVI A, 0x05 (TX enable, RX enable)
+    0xD3, 0x01, // OUT 0x01  (command)
     // loop: print 'A'
-    0x3E, 0x41,       // MVI A, 0x41 ('A')
-    0xD3, 0x00,       // OUT 0x00  (data port)
+    0x3E, 0x41, // MVI A, 0x41 ('A')
+    0xD3, 0x00, // OUT 0x00  (data port)
     0xC3, 0x0A, 0x00, // JMP 0x000A
 ];
 
@@ -234,11 +228,17 @@ const CPMB: u16 = 0xE400;
 fn main() {
     let args: Vec<String> = env::args().collect();
     let bare = args.contains(&"--bare".to_string());
-    let load_arg = args.iter().position(|a| a == "--load")
+    let load_arg = args
+        .iter()
+        .position(|a| a == "--load")
         .and_then(|i| args.get(i + 1).cloned());
-    let disk_arg = args.iter().position(|a| a == "--disk")
+    let disk_arg = args
+        .iter()
+        .position(|a| a == "--disk")
         .and_then(|i| args.get(i + 1).cloned());
-    let program_arg = args.iter().position(|a| a == "--program")
+    let program_arg = args
+        .iter()
+        .position(|a| a == "--program")
         .and_then(|i| args.get(i + 1).cloned());
 
     if args.contains(&"--help".to_string()) || args.contains(&"-h".to_string()) {
@@ -271,7 +271,8 @@ fn main() {
         .iter()
         .find_map(|p| rl.load_font_ex(&thread, p, 96, None).ok());
     if let Some(ref f) = logo_font {
-        f.texture().set_texture_filter(&thread, TextureFilter::TEXTURE_FILTER_BILINEAR);
+        f.texture()
+            .set_texture_filter(&thread, TextureFilter::TEXTURE_FILTER_BILINEAR);
     }
 
     let mut emu = Imsai8080::new();
@@ -279,7 +280,9 @@ fn main() {
     // data byte for DEPOSIT (exactly as on the real IMSAI front panel).
     let mut addr_sw = [false; 16];
     let mut program_name = String::new(); // shown in UI
-    let shot_arg = args.iter().position(|a| a == "--shot")
+    let shot_arg = args
+        .iter()
+        .position(|a| a == "--shot")
         .and_then(|i| args.get(i + 1).cloned());
     let mut frame: u64 = 0;
 
@@ -307,7 +310,12 @@ fn main() {
                 }
             }
         } else if let Some(ref path) = disk_arg {
-            match emu.bus.card_mut::<TarbellCard>().unwrap().insert_disk(0, path) {
+            match emu
+                .bus
+                .card_mut::<TarbellCard>()
+                .unwrap()
+                .insert_disk(0, path)
+            {
                 Ok(()) => {
                     boot_cpm(&mut emu);
                     // Start STOPPED at CCP entry point, user presses F5 to run
@@ -318,7 +326,8 @@ fn main() {
             true
         } else if let Some(ref path) = load_arg {
             let addr_idx = args.iter().position(|a| a == "--load").unwrap() + 2;
-            let addr: u16 = args.get(addr_idx)
+            let addr: u16 = args
+                .get(addr_idx)
                 .and_then(|s| u16::from_str_radix(s.trim_start_matches("0x"), 16).ok())
                 .unwrap_or(0);
             match std::fs::read(path) {
@@ -361,20 +370,20 @@ fn main() {
     // red LEDs, blue/red paddle switches, gray chassis surround.
     let rgb = |r, g, b| raylib::color::Color { r, g, b, a: 255 };
     let rgba = |r, g, b, a| raylib::color::Color { r, g, b, a };
-    let bg        = rgb(78, 78, 82);     // gray chassis around the panel
-    let panel_bg  = rgb(12, 12, 14);     // black panel face
-    let panel_edge= rgb(38, 38, 42);     // panel inner bevel
-    let led_on    = rgb(255, 60, 42);    // lit red LED
-    let led_off   = rgb(46, 12, 10);     // dark (off) red LED
-    let led_glow  = rgba(255, 80, 50, 70); // LED glow halo
-    let txt       = rgb(232, 232, 232);  // white silk-screen label
-    let txt_dim   = rgb(150, 150, 154);  // dim label
-    let txt_bright= rgb(245, 245, 245);  // bright white (logo / numbers)
-    let t_fg      = rgb(50, 255, 50);    // green CRT text
-    let t_bg      = rgb(8, 16, 8);       // CRT background
-    // Paddle switch base colors (blue = high nibble, red = low nibble).
-    let sw_blue   = rgb(78, 104, 188);
-    let sw_red    = rgb(196, 58, 44);
+    let bg = rgb(78, 78, 82); // gray chassis around the panel
+    let panel_bg = rgb(12, 12, 14); // black panel face
+    let panel_edge = rgb(38, 38, 42); // panel inner bevel
+    let led_on = rgb(255, 60, 42); // lit red LED
+    let led_off = rgb(46, 12, 10); // dark (off) red LED
+    let led_glow = rgba(255, 80, 50, 70); // LED glow halo
+    let txt = rgb(232, 232, 232); // white silk-screen label
+    let txt_dim = rgb(150, 150, 154); // dim label
+    let txt_bright = rgb(245, 245, 245); // bright white (logo / numbers)
+    let t_fg = rgb(50, 255, 50); // green CRT text
+    let t_bg = rgb(8, 16, 8); // CRT background
+                              // Paddle switch base colors (blue = high nibble, red = low nibble).
+    let sw_blue = rgb(78, 104, 188);
+    let sw_red = rgb(196, 58, 44);
 
     // Panel rectangle.
     let panel_x: i32 = PX;
@@ -384,14 +393,18 @@ fn main() {
 
     while !rl.window_should_close() {
         // ---- Input: toggle switches (suppressed when picker is open) ----
-        if matches!(picker, PickerState::Closed) && rl.is_mouse_button_pressed(MouseButton::MOUSE_BUTTON_LEFT) {
+        if matches!(picker, PickerState::Closed)
+            && rl.is_mouse_button_pressed(MouseButton::MOUSE_BUTTON_LEFT)
+        {
             let m = rl.get_mouse_position();
 
             // Helper: did the click land on the paddle centered at column `cx`?
             let hit_paddle = |cx: i32| -> bool {
                 let left = (cx - PADDLE_W / 2) as f32;
-                m.x >= left && m.x < left + PADDLE_W as f32
-                    && m.y >= Y_SW as f32 && m.y < (Y_SW + PADDLE_H) as f32
+                m.x >= left
+                    && m.x < left + PADDLE_W as f32
+                    && m.y >= Y_SW as f32
+                    && m.y < (Y_SW + PADDLE_H) as f32
             };
 
             // 16 address/data sense switches. Click upper half = set (1),
@@ -409,12 +422,22 @@ fn main() {
             for i in 0..6usize {
                 let cx = ctrl_col_x(i);
                 let left = (cx - PADDLE_W / 2) as f32;
-                if m.x >= left && m.x < left + PADDLE_W as f32
-                    && m.y >= Y_SW as f32 && m.y < (Y_SW + PADDLE_H) as f32
+                if m.x >= left
+                    && m.x < left + PADDLE_W as f32
+                    && m.y >= Y_SW as f32
+                    && m.y < (Y_SW + PADDLE_H) as f32
                 {
                     match i {
-                        0 => emu.panel.press_switch(if up { PanelSwitch::Examine } else { PanelSwitch::ExamineNext }),
-                        1 => emu.panel.press_switch(if up { PanelSwitch::Deposit } else { PanelSwitch::DepositNext }),
+                        0 => emu.panel.press_switch(if up {
+                            PanelSwitch::Examine
+                        } else {
+                            PanelSwitch::ExamineNext
+                        }),
+                        1 => emu.panel.press_switch(if up {
+                            PanelSwitch::Deposit
+                        } else {
+                            PanelSwitch::DepositNext
+                        }),
                         2 => {
                             // RESET (up) / EXT.CLR (down): restart CPU at 0
                             emu.cpu.pc = 0;
@@ -433,7 +456,7 @@ fn main() {
         if matches!(picker, PickerState::Closed) && rl.is_key_pressed(KeyboardKey::KEY_F5) {
             emu.panel.press_switch(PanelSwitch::RunStop);
         }
-        // F2: Open load picker (list .json programs in PROGRAMS/)
+        // F2: Open load picker (list .json programs in programs/)
         if rl.is_key_pressed(KeyboardKey::KEY_F2) {
             let prog_dir = default_programs_dir();
             if let Ok(entries_fs) = fs::read_dir(&prog_dir) {
@@ -452,13 +475,17 @@ fn main() {
                     .collect();
                 files.sort_by(|a, b| a.name.cmp(&b.name));
                 if files.is_empty() {
-                    status_msg = "No .json programs in PROGRAMS/".to_string();
+                    status_msg = "No .json programs in programs/".to_string();
                     status_msg_timer = 180;
                 } else {
-                    picker = PickerState::Load { entries: files, scroll: 0, selected: 0 };
+                    picker = PickerState::Load {
+                        entries: files,
+                        scroll: 0,
+                        selected: 0,
+                    };
                 }
             } else {
-                status_msg = "PROGRAMS/ directory not found".to_string();
+                status_msg = "programs/ directory not found".to_string();
                 status_msg_timer = 180;
             }
         }
@@ -466,7 +493,10 @@ fn main() {
         if rl.is_key_pressed(KeyboardKey::KEY_F3) {
             let pc = emu.cpu.pc;
             let default_name = format!("save_{:04X}", pc);
-            picker = PickerState::Save { filename: default_name, cursor_blink: 0 };
+            picker = PickerState::Save {
+                filename: default_name,
+                cursor_blink: 0,
+            };
         }
 
         // Handle picker input
@@ -475,16 +505,28 @@ fn main() {
         let mut picker_action: Option<PickerAction> = None;
         match &mut picker {
             PickerState::Closed => {}
-            PickerState::Load { entries, scroll, selected } => {
+            PickerState::Load {
+                entries,
+                scroll,
+                selected,
+            } => {
                 if rl.is_key_pressed(KeyboardKey::KEY_ESCAPE) {
                     picker_action = Some(PickerAction::Cancel);
                 } else if rl.is_key_pressed(KeyboardKey::KEY_UP) {
-                    if *selected > 0 { *selected -= 1; }
-                    if *selected < *scroll { *scroll = *selected; }
+                    if *selected > 0 {
+                        *selected -= 1;
+                    }
+                    if *selected < *scroll {
+                        *scroll = *selected;
+                    }
                 } else if rl.is_key_pressed(KeyboardKey::KEY_DOWN) {
-                    if *selected < entries.len() as i32 - 1 { *selected += 1; }
+                    if *selected < entries.len() as i32 - 1 {
+                        *selected += 1;
+                    }
                     let visible_rows = 10;
-                    if *selected >= *scroll + visible_rows { *scroll = *selected - visible_rows + 1; }
+                    if *selected >= *scroll + visible_rows {
+                        *scroll = *selected - visible_rows + 1;
+                    }
                 } else if rl.is_key_pressed(KeyboardKey::KEY_ENTER) {
                     if let Some(entry) = entries.get(*selected as usize).cloned() {
                         picker_action = Some(PickerAction::Load(entry.path.clone()));
@@ -500,8 +542,11 @@ fn main() {
                     let list_y = overlay_y + 50;
                     let list_h = overlay_h - 68;
                     let row_h: i32 = 36;
-                    if m.x >= overlay_x as f32 && m.x < (overlay_x + overlay_w) as f32
-                        && m.y >= list_y as f32 && m.y < (list_y + list_h) as f32 {
+                    if m.x >= overlay_x as f32
+                        && m.x < (overlay_x + overlay_w) as f32
+                        && m.y >= list_y as f32
+                        && m.y < (list_y + list_h) as f32
+                    {
                         let click_row = ((m.y - list_y as f32) / row_h as f32) as i32;
                         let new_sel = *scroll + click_row;
                         if new_sel >= 0 && (new_sel as usize) < entries.len() {
@@ -510,7 +555,10 @@ fn main() {
                     }
                 }
             }
-            PickerState::Save { filename, cursor_blink } => {
+            PickerState::Save {
+                filename,
+                cursor_blink,
+            } => {
                 *cursor_blink += 1;
                 if rl.is_key_pressed(KeyboardKey::KEY_ESCAPE) {
                     picker_action = Some(PickerAction::Cancel);
@@ -532,10 +580,19 @@ fn main() {
                 PickerAction::Load(path) => {
                     match load_program_file(&path) {
                         Ok(prog) => {
-                            eprintln!("Loaded: {} (PC=0x{:04X}, running={})", prog.name, emu.cpu.pc, emu.panel.is_running());
+                            eprintln!(
+                                "Loaded: {} (PC=0x{:04X}, running={})",
+                                prog.name,
+                                emu.cpu.pc,
+                                emu.panel.is_running()
+                            );
                             emu = Imsai8080::new();
                             execute_panel_program(&mut emu, &prog);
-                            eprintln!("After execute: PC=0x{:04X}, running={}", emu.cpu.pc, emu.panel.is_running());
+                            eprintln!(
+                                "After execute: PC=0x{:04X}, running={}",
+                                emu.cpu.pc,
+                                emu.panel.is_running()
+                            );
                             if let Some(start_addr) = find_program_start(&prog) {
                                 for i in 0..16 {
                                     addr_sw[i] = (start_addr >> (15 - i)) & 1 != 0;
@@ -548,7 +605,8 @@ fn main() {
                             tcy = 0;
                             // If the program has a "run" step, the front panel is already in RUN mode
                             running = emu.panel.is_running();
-                            status_msg = format!("Loaded: {} (PC={:04X})", program_name, emu.cpu.pc);
+                            status_msg =
+                                format!("Loaded: {} (PC={:04X})", program_name, emu.cpu.pc);
                             status_msg_timer = 180;
                         }
                         Err(e) => {
@@ -559,14 +617,21 @@ fn main() {
                     picker = PickerState::Closed;
                 }
                 PickerAction::Save(filename) => {
-                    let addr_val: u16 = addr_sw.iter().enumerate()
-                        .fold(0u16, |a, (i, &on)| if on { a | (1 << (15 - i)) } else { a });
+                    let addr_val: u16 = addr_sw.iter().enumerate().fold(0u16, |a, (i, &on)| {
+                        if on {
+                            a | (1 << (15 - i))
+                        } else {
+                            a
+                        }
+                    });
                     let start = addr_val;
                     let dump_len: u16 = 256;
                     let prog = memory_to_program(
                         &filename,
                         &format!("Saved from {:04X}, {} bytes", start, dump_len),
-                        start, dump_len, &emu,
+                        start,
+                        dump_len,
+                        &emu,
                     );
                     if fs::create_dir_all(default_programs_dir()).is_ok() {
                         let save_path = default_programs_dir().join(format!("{}.json", filename));
@@ -606,7 +671,9 @@ fn main() {
         // Keyboard input for terminal (only when running and picker closed)
         if running && matches!(picker, PickerState::Closed) {
             if let Some(ch) = rl.get_char_pressed() {
-                emu.bus.serial().type_text(&ch.to_uppercase().collect::<String>());
+                emu.bus
+                    .serial()
+                    .type_text(&ch.to_uppercase().collect::<String>());
             }
             if rl.is_key_pressed(KeyboardKey::KEY_ENTER) {
                 emu.bus.serial().type_text("\r");
@@ -620,8 +687,11 @@ fn main() {
         // User input already set addr_sw/data_sw via mouse clicks.
         // Forward those to the panel, then read back in case the panel
         // changed them (e.g., deposit_next auto-advances the address).
-        let addr_val: u16 = addr_sw.iter().enumerate()
-            .fold(0u16, |a, (i, &on)| if on { a | (1 << (15 - i)) } else { a });
+        let addr_val: u16 =
+            addr_sw
+                .iter()
+                .enumerate()
+                .fold(0u16, |a, (i, &on)| if on { a | (1 << (15 - i)) } else { a });
         // Low 8 sense switches double as the data byte (real IMSAI behavior).
         let data_val: u8 = (addr_val & 0xFF) as u8;
         emu.panel.set_address_switches(addr_val);
@@ -658,13 +728,29 @@ fn main() {
             let output = emu.bus.serial().channel_a_mut().take_output();
             for &b in &output {
                 match b {
-                    0x0D | 0x0A => { tcx = 0; tcy += 1; if tcy >= TERM_ROWS { tcy = TERM_ROWS - 1; } }
-                    0x08 => { if tcx > 0 { tcx -= 1; } }
+                    0x0D | 0x0A => {
+                        tcx = 0;
+                        tcy += 1;
+                        if tcy >= TERM_ROWS {
+                            tcy = TERM_ROWS - 1;
+                        }
+                    }
+                    0x08 => {
+                        if tcx > 0 {
+                            tcx -= 1;
+                        }
+                    }
                     0x20..=0x7E => {
                         if tcx < TERM_COLS && tcy < TERM_ROWS {
                             term[tcy][tcx] = b;
                             tcx += 1;
-                            if tcx >= TERM_COLS { tcx = 0; tcy += 1; if tcy >= TERM_ROWS { tcy = TERM_ROWS - 1; } }
+                            if tcx >= TERM_COLS {
+                                tcx = 0;
+                                tcy += 1;
+                                if tcy >= TERM_ROWS {
+                                    tcy = TERM_ROWS - 1;
+                                }
+                            }
                         }
                     }
                     _ => {}
@@ -680,15 +766,24 @@ fn main() {
         let leds = emu.panel.leds();
 
         // Panel face with a thin raised bevel against the gray chassis.
-        d.draw_rectangle(panel_x - 3, panel_y - 3, panel_w + 6, PH + 6, rgb(150, 150, 154));
+        d.draw_rectangle(
+            panel_x - 3,
+            panel_y - 3,
+            panel_w + 6,
+            PH + 6,
+            rgb(150, 150, 154),
+        );
         d.draw_rectangle(panel_x, panel_y, panel_w, PH, panel_bg);
         d.draw_rectangle_lines(panel_x, panel_y, panel_w, PH, panel_edge);
 
         // Decorative mounting screws (corners + mid-edges).
         for &(sx, sy) in &[
-            (panel_x + 22, panel_y + 110), (panel_x + 22, panel_y + 270),
-            (panel_x + panel_w - 22, panel_y + 110), (panel_x + panel_w - 22, panel_y + 270),
-            (PX + 452, panel_y + 270), (PX + 770, panel_y + 270),
+            (panel_x + 22, panel_y + 110),
+            (panel_x + 22, panel_y + 270),
+            (panel_x + panel_w - 22, panel_y + 110),
+            (panel_x + panel_w - 22, panel_y + 270),
+            (PX + 452, panel_y + 270),
+            (PX + 770, panel_y + 270),
         ] {
             draw_screw(&mut d, sx, sy);
         }
@@ -706,15 +801,35 @@ fn main() {
             let big_sp = 4.0;
             let big_w = f.measure_text(big, big_size, big_sp).x;
             let big_x = right_edge as f32 - big_w;
-            d.draw_text_ex(f, big, Vector2::new(big_x, big_y as f32), big_size, big_sp, txt_bright);
+            d.draw_text_ex(
+                f,
+                big,
+                Vector2::new(big_x, big_y as f32),
+                big_size,
+                big_sp,
+                txt_bright,
+            );
 
             let sub_size = 15.0_f32;
             let sub_sp = 1.5;
             let sub_w = f.measure_text(sub, sub_size, sub_sp).x;
             let sub_x = right_edge as f32 - sub_w;
             let line_y = big_y + big_size as i32 + 5;
-            d.draw_rectangle(big_x as i32 + 2, line_y, (sub_x as i32 - 10) - (big_x as i32 + 2), 2, txt_bright);
-            d.draw_text_ex(f, sub, Vector2::new(sub_x, (line_y - 8) as f32), sub_size, sub_sp, txt);
+            d.draw_rectangle(
+                big_x as i32 + 2,
+                line_y,
+                (sub_x as i32 - 10) - (big_x as i32 + 2),
+                2,
+                txt_bright,
+            );
+            d.draw_text_ex(
+                f,
+                sub,
+                Vector2::new(sub_x, (line_y - 8) as f32),
+                sub_size,
+                sub_sp,
+                txt,
+            );
         } else {
             // Fallback: built-in bitmap font.
             let big_size = 54;
@@ -744,8 +859,14 @@ fn main() {
         // Row 2: STATUS BYTE (left) + DATA BUS (right)
         // ---------------------------------------------------------------
         let status = [
-            ("MEMR", leds.memr), ("INP", leds.ior), ("M1", leds.m1), ("OUT", leds.iow),
-            ("HLTA", leds.hlta), ("STACK", false), ("WO", leds.mwrt), ("INTA", leds.int),
+            ("MEMR", leds.memr),
+            ("INP", leds.ior),
+            ("M1", leds.m1),
+            ("OUT", leds.iow),
+            ("HLTA", leds.hlta),
+            ("STACK", false),
+            ("WO", leds.mwrt),
+            ("INTA", leds.int),
         ];
         for (j, (lbl, on)) in status.iter().enumerate() {
             let cx = byte_col_x(LBYTE_X0, j);
@@ -771,7 +892,15 @@ fn main() {
             // Hex weight per nibble: 8 4 2 1.
             let weight = [8, 4, 2, 1][i % 4];
             d.draw_text(&format!("{}", weight), cx - 3, Y_ADDR - 24, 11, txt_dim);
-            draw_led(&mut d, cx, Y_ADDR, leds.address[i], led_on, led_off, led_glow);
+            draw_led(
+                &mut d,
+                cx,
+                Y_ADDR,
+                leds.address[i],
+                led_on,
+                led_off,
+                led_glow,
+            );
         }
         d.draw_text("ADDRESS", PX + 332, Y_ADDR - 14, 12, txt);
         d.draw_text("BUS", PX + 332, Y_ADDR + 2, 12, txt);
@@ -781,7 +910,10 @@ fn main() {
 
         // Mode LEDs (right): INTERRUPTS ENABLED, RUN, WAIT, HOLD.
         let modes = [
-            ("INTE", false), ("RUN", leds.run), ("WAIT", leds.wait), ("HOLD", leds.hlda),
+            ("INTE", false),
+            ("RUN", leds.run),
+            ("WAIT", leds.wait),
+            ("HOLD", leds.hlda),
         ];
         for (k, (lbl, on)) in modes.iter().enumerate() {
             let cx = ctrl_col_x(2 + k);
@@ -830,22 +962,45 @@ fn main() {
 
         // Transient status message over the panel (load/save feedback).
         if status_msg_timer > 0 {
-            let alpha = (if status_msg_timer < 30 { status_msg_timer * 8 } else { 255 }).min(255) as u8;
-            d.draw_text(&status_msg, PX + 24, PY + PH - 18, 12, rgba(255, 180, 120, alpha));
+            let alpha = (if status_msg_timer < 30 {
+                status_msg_timer * 8
+            } else {
+                255
+            })
+            .min(255) as u8;
+            d.draw_text(
+                &status_msg,
+                PX + 24,
+                PY + PH - 18,
+                12,
+                rgba(255, 180, 120, alpha),
+            );
             status_msg_timer -= 1;
         }
 
         // === Bottom bar: machine state + keyboard shortcuts ===
         d.draw_rectangle(0, H - 22, W, 22, rgb(28, 28, 30));
         let cpu = &emu.cpu;
-        let state = if cpu.halted { "HALT" } else if running_now { "RUN " } else { "STOP" };
+        let state = if cpu.halted {
+            "HALT"
+        } else if running_now {
+            "RUN "
+        } else {
+            "STOP"
+        };
         let line = format!(
             "{}  PC:{:04X} SP:{:04X} A:{:02X} BC:{:02X}{:02X} DE:{:02X}{:02X} HL:{:02X}{:02X}   {}   cyc:{}",
             state, cpu.pc, cpu.sp, cpu.a, cpu.b, cpu.c, cpu.d, cpu.e, cpu.h, cpu.l,
             program_name, cycles,
         );
         d.draw_text(&line, 10, H - 16, 11, txt_dim);
-        d.draw_text("F5 run/stop  F2 load  F3 save  R reset", W - 320, H - 16, 11, txt_dim);
+        d.draw_text(
+            "F5 run/stop  F2 load  F3 save  R reset",
+            W - 320,
+            H - 16,
+            11,
+            txt_dim,
+        );
 
         // === CRT Terminal display (below panel) ===
         let term_y: i32 = panel_bottom + 10;
@@ -853,22 +1008,51 @@ fn main() {
         let term_x: i32 = 8;
         let term_w: i32 = W - 16;
         // CRT bezel (dark rounded border)
-        d.draw_rectangle(term_x - 4, term_y - 4, term_w + 8, term_h + 8, raylib::color::Color { r: 40, g: 38, b: 35, a: 255 });
+        d.draw_rectangle(
+            term_x - 4,
+            term_y - 4,
+            term_w + 8,
+            term_h + 8,
+            raylib::color::Color {
+                r: 40,
+                g: 38,
+                b: 35,
+                a: 255,
+            },
+        );
         d.draw_rectangle_lines(term_x - 4, term_y - 4, term_w + 8, term_h + 8, panel_edge);
         // CRT screen (dark green phosphor)
         d.draw_rectangle(term_x, term_y, term_w, term_h, t_bg);
         // Scanline effect: subtle horizontal lines
-        let scanline_col = raylib::color::Color { r: 10, g: 22, b: 10, a: 40 };
+        let scanline_col = raylib::color::Color {
+            r: 10,
+            g: 22,
+            b: 10,
+            a: 40,
+        };
         for scan_y in (term_y..term_y + term_h).step_by(3) {
             d.draw_rectangle(term_x, scan_y, term_w, 1, scanline_col);
         }
-        d.draw_text("CONSOLE", term_x + 4, term_y + 2, 10, raylib::color::Color { r: 30, g: 80, b: 30, a: 180 });
+        d.draw_text(
+            "CONSOLE",
+            term_x + 4,
+            term_y + 2,
+            10,
+            raylib::color::Color {
+                r: 30,
+                g: 80,
+                b: 30,
+                a: 180,
+            },
+        );
 
         let term_text_y = term_y + 16;
         let term_text_x = term_x + 4;
         for row in 0..TERM_ROWS {
             let row_top = term_text_y + row as i32 * TERM_CHAR_H;
-            if row_top + TERM_CHAR_H > term_y + term_h { break; }
+            if row_top + TERM_CHAR_H > term_y + term_h {
+                break;
+            }
             for col in 0..TERM_COLS {
                 let ch = term[row][col];
                 // Only render printable ASCII; suppress high bytes that
@@ -878,7 +1062,8 @@ fn main() {
                         &format!("{}", ch as char),
                         term_text_x + col as i32 * TERM_CHAR_W,
                         row_top,
-                        10, t_fg
+                        10,
+                        t_fg,
                     );
                 }
             }
@@ -887,7 +1072,18 @@ fn main() {
         // === I/O log (right side of terminal area) ===
         let iolog_x = term_x + TERM_COLS as i32 * TERM_CHAR_W + 20;
         if iolog_x + 140 < term_x + term_w {
-            d.draw_text("I/O LOG", iolog_x, term_y + 4, 10, raylib::color::Color { r: 30, g: 80, b: 30, a: 180 });
+            d.draw_text(
+                "I/O LOG",
+                iolog_x,
+                term_y + 4,
+                10,
+                raylib::color::Color {
+                    r: 30,
+                    g: 80,
+                    b: 30,
+                    a: 180,
+                },
+            );
             let io_log = emu.panel.io_log();
             let log_start = io_log.len().saturating_sub(10);
             for (i, ev) in io_log[log_start..].iter().enumerate() {
@@ -895,7 +1091,10 @@ fn main() {
                 let kind = if ev.is_io { "IO" } else { "MEM" };
                 d.draw_text(
                     &format!("{} {:04X} {:02X} {}", dir, ev.address, ev.data, kind),
-                    iolog_x, term_y + 18 + i as i32 * 13, 9, txt_dim
+                    iolog_x,
+                    term_y + 18 + i as i32 * 13,
+                    9,
+                    txt_dim,
                 );
             }
         }
@@ -907,30 +1106,87 @@ fn main() {
             let overlay_w: i32 = 680;
             let overlay_h: i32 = 420;
             // Dim background
-            d.draw_rectangle(0, 0, W, H, raylib::color::Color { r: 0, g: 0, b: 0, a: 160 });
+            d.draw_rectangle(
+                0,
+                0,
+                W,
+                H,
+                raylib::color::Color {
+                    r: 0,
+                    g: 0,
+                    b: 0,
+                    a: 160,
+                },
+            );
             // Panel background (uses front panel aluminum color)
             d.draw_rectangle(overlay_x, overlay_y, overlay_w, overlay_h, panel_bg);
             d.draw_rectangle_lines(overlay_x, overlay_y, overlay_w, overlay_h, panel_edge);
 
             match &picker {
-                PickerState::Load { entries, scroll, selected } => {
-                    d.draw_text("LOAD PROGRAM", overlay_x + 10, overlay_y + 8, 16, txt_bright);
-                    d.draw_text("Up/Down = navigate    Enter = load    Esc = cancel", overlay_x + 10, overlay_y + 28, 10, txt_dim);
+                PickerState::Load {
+                    entries,
+                    scroll,
+                    selected,
+                } => {
+                    d.draw_text(
+                        "LOAD PROGRAM",
+                        overlay_x + 10,
+                        overlay_y + 8,
+                        16,
+                        txt_bright,
+                    );
+                    d.draw_text(
+                        "Up/Down = navigate    Enter = load    Esc = cancel",
+                        overlay_x + 10,
+                        overlay_y + 28,
+                        10,
+                        txt_dim,
+                    );
                     let list_y = overlay_y + 50;
                     let list_h = overlay_h - 68;
                     let row_h: i32 = 36;
                     let visible_rows = (list_h / row_h) as usize;
-                    d.draw_rectangle(overlay_x + 5, list_y, overlay_w - 10, list_h, raylib::color::Color { r: 30, g: 30, b: 28, a: 255 });
+                    d.draw_rectangle(
+                        overlay_x + 5,
+                        list_y,
+                        overlay_w - 10,
+                        list_h,
+                        raylib::color::Color {
+                            r: 30,
+                            g: 30,
+                            b: 28,
+                            a: 255,
+                        },
+                    );
                     for i in 0..visible_rows {
                         let idx = *scroll as usize + i;
-                        if idx >= entries.len() { break; }
+                        if idx >= entries.len() {
+                            break;
+                        }
                         let entry = &entries[idx];
                         let row_y = list_y + i as i32 * row_h;
                         let is_sel = idx == *selected as usize;
                         if is_sel {
-                            d.draw_rectangle(overlay_x + 5, row_y, overlay_w - 10, row_h, raylib::color::Color { r: 60, g: 30, b: 20, a: 255 });
+                            d.draw_rectangle(
+                                overlay_x + 5,
+                                row_y,
+                                overlay_w - 10,
+                                row_h,
+                                raylib::color::Color {
+                                    r: 60,
+                                    g: 30,
+                                    b: 20,
+                                    a: 255,
+                                },
+                            );
                         }
-                        d.draw_text(&entry.name, overlay_x + 15, row_y + 4, 15, if is_sel { led_on } else { txt_bright });
+                        d.draw_text(
+                            &entry.name,
+                            overlay_x + 15,
+                            row_y + 4,
+                            15,
+                            if is_sel { led_on } else { txt_bright },
+                        );
                         let desc_max_chars = ((overlay_w - 30) / 6) as usize;
                         let desc: String = entry.description.chars().take(desc_max_chars).collect();
                         d.draw_text(&desc, overlay_x + 15, row_y + 20, 10, txt_dim);
@@ -939,16 +1195,54 @@ fn main() {
                         d.draw_text("  ^ more above ^", overlay_x + 10, list_y - 14, 9, txt_dim);
                     }
                     if (*scroll as usize + visible_rows) < entries.len() {
-                        d.draw_text("  v more below v", overlay_x + 10, list_y + list_h + 2, 9, txt_dim);
+                        d.draw_text(
+                            "  v more below v",
+                            overlay_x + 10,
+                            list_y + list_h + 2,
+                            9,
+                            txt_dim,
+                        );
                     }
-                    d.draw_text(&format!("{} / {} entries", selected + 1, entries.len()), overlay_x + 10, overlay_y + overlay_h - 18, 10, txt_dim);
+                    d.draw_text(
+                        &format!("{} / {} entries", selected + 1, entries.len()),
+                        overlay_x + 10,
+                        overlay_y + overlay_h - 18,
+                        10,
+                        txt_dim,
+                    );
                 }
-                PickerState::Save { filename, cursor_blink } => {
-                    d.draw_text("SAVE PROGRAM (Enter = save, Esc = cancel)", overlay_x + 10, overlay_y + 8, 14, txt_bright);
-                    d.draw_text("Saved to PROGRAMS/<name>.json", overlay_x + 10, overlay_y + 28, 10, txt_dim);
+                PickerState::Save {
+                    filename,
+                    cursor_blink,
+                } => {
+                    d.draw_text(
+                        "SAVE PROGRAM (Enter = save, Esc = cancel)",
+                        overlay_x + 10,
+                        overlay_y + 8,
+                        14,
+                        txt_bright,
+                    );
+                    d.draw_text(
+                        "Saved to programs/<name>.json",
+                        overlay_x + 10,
+                        overlay_y + 28,
+                        10,
+                        txt_dim,
+                    );
                     d.draw_text("Filename:", overlay_x + 10, overlay_y + 56, 14, txt);
                     let input_y = overlay_y + 76;
-                    d.draw_rectangle(overlay_x + 10, input_y, overlay_w - 20, 30, raylib::color::Color { r: 20, g: 20, b: 18, a: 255 });
+                    d.draw_rectangle(
+                        overlay_x + 10,
+                        input_y,
+                        overlay_w - 20,
+                        30,
+                        raylib::color::Color {
+                            r: 20,
+                            g: 20,
+                            b: 18,
+                            a: 255,
+                        },
+                    );
                     d.draw_rectangle_lines(overlay_x + 10, input_y, overlay_w - 20, 30, panel_edge);
                     let display_name = if *cursor_blink / 20 % 2 == 0 {
                         format!("{}.json|", filename)
@@ -956,11 +1250,31 @@ fn main() {
                         format!("{}.json ", filename)
                     };
                     d.draw_text(&display_name, overlay_x + 16, input_y + 6, 16, led_on);
-                    d.draw_text("Saves 256 bytes from address switches position", overlay_x + 10, overlay_y + 120, 10, txt_dim);
-                    let addr_val_display: u16 = addr_sw.iter().enumerate()
+                    d.draw_text(
+                        "Saves 256 bytes from address switches position",
+                        overlay_x + 10,
+                        overlay_y + 120,
+                        10,
+                        txt_dim,
+                    );
+                    let addr_val_display: u16 = addr_sw
+                        .iter()
+                        .enumerate()
                         .fold(0u16, |a, (i, &on)| if on { a | (1 << (15 - i)) } else { a });
-                    d.draw_text(&format!("Start address: {:04X}", addr_val_display), overlay_x + 10, overlay_y + 140, 14, txt);
-                    d.draw_text("Length: 256 bytes (0x100)", overlay_x + 10, overlay_y + 160, 14, txt);
+                    d.draw_text(
+                        &format!("Start address: {:04X}", addr_val_display),
+                        overlay_x + 10,
+                        overlay_y + 140,
+                        14,
+                        txt,
+                    );
+                    d.draw_text(
+                        "Length: 256 bytes (0x100)",
+                        overlay_x + 10,
+                        overlay_y + 160,
+                        14,
+                        txt,
+                    );
                 }
                 PickerState::Closed => {}
             }
@@ -1005,7 +1319,9 @@ fn darken(c: raylib::color::Color, amt: u8) -> raylib::color::Color {
 /// Draw a round red panel LED centered at (cx, cy).
 fn draw_led(
     d: &mut raylib::drawing::RaylibDrawHandle,
-    cx: i32, cy: i32, on: bool,
+    cx: i32,
+    cy: i32,
+    on: bool,
     on_color: raylib::color::Color,
     off_color: raylib::color::Color,
     glow: raylib::color::Color,
@@ -1013,7 +1329,17 @@ fn draw_led(
     let cxf = cx as f32;
     let cyf = cy as f32;
     // Dark bezel ring.
-    d.draw_circle(cx, cy, LED_RAD + 2.5, raylib::color::Color { r: 30, g: 30, b: 32, a: 255 });
+    d.draw_circle(
+        cx,
+        cy,
+        LED_RAD + 2.5,
+        raylib::color::Color {
+            r: 30,
+            g: 30,
+            b: 32,
+            a: 255,
+        },
+    );
     if on {
         d.draw_circle(cx, cy, LED_RAD + 4.0, glow);
     }
@@ -1022,17 +1348,68 @@ fn draw_led(
         // Specular highlight.
         d.draw_circle(cx - 2, cy - 2, 2.0, lighten(on_color, 90));
     } else {
-        d.draw_circle(cxf as i32 - 2, cyf as i32 - 2, 1.5, raylib::color::Color { r: 80, g: 24, b: 20, a: 255 });
+        d.draw_circle(
+            cxf as i32 - 2,
+            cyf as i32 - 2,
+            1.5,
+            raylib::color::Color {
+                r: 80,
+                g: 24,
+                b: 20,
+                a: 255,
+            },
+        );
     }
 }
 
 /// Draw a decorative chrome mounting screw centered at (cx, cy).
 fn draw_screw(d: &mut raylib::drawing::RaylibDrawHandle, cx: i32, cy: i32) {
-    d.draw_circle(cx, cy, 7.0, raylib::color::Color { r: 22, g: 22, b: 24, a: 255 });
-    d.draw_circle(cx, cy, 5.5, raylib::color::Color { r: 120, g: 120, b: 124, a: 255 });
-    d.draw_circle(cx - 1, cy - 1, 2.0, raylib::color::Color { r: 175, g: 175, b: 178, a: 255 });
+    d.draw_circle(
+        cx,
+        cy,
+        7.0,
+        raylib::color::Color {
+            r: 22,
+            g: 22,
+            b: 24,
+            a: 255,
+        },
+    );
+    d.draw_circle(
+        cx,
+        cy,
+        5.5,
+        raylib::color::Color {
+            r: 120,
+            g: 120,
+            b: 124,
+            a: 255,
+        },
+    );
+    d.draw_circle(
+        cx - 1,
+        cy - 1,
+        2.0,
+        raylib::color::Color {
+            r: 175,
+            g: 175,
+            b: 178,
+            a: 255,
+        },
+    );
     // Slot.
-    d.draw_rectangle(cx - 4, cy - 1, 8, 2, raylib::color::Color { r: 50, g: 50, b: 52, a: 255 });
+    d.draw_rectangle(
+        cx - 4,
+        cy - 1,
+        8,
+        2,
+        raylib::color::Color {
+            r: 50,
+            g: 50,
+            b: 52,
+            a: 255,
+        },
+    );
 }
 
 /// Draw an IMSAI paddle toggle switch centered horizontally on `cx`, with its
@@ -1040,7 +1417,8 @@ fn draw_screw(d: &mut raylib::drawing::RaylibDrawHandle, cx: i32, cy: i32) {
 /// glossy face toward the top (switch in the up/1 position).
 fn draw_paddle(
     d: &mut raylib::drawing::RaylibDrawHandle,
-    cx: i32, top_y: i32,
+    cx: i32,
+    top_y: i32,
     base: raylib::color::Color,
     up: bool,
     _bezel: raylib::color::Color,
@@ -1053,12 +1431,29 @@ fn draw_paddle(
 
     // Soft recessed shadow under the paddle (no hard outline box).
     d.draw_rectangle_rounded(
-        Rectangle { x: x - 1.0, y: y + 2.0, width: w + 2.0, height: h },
-        0.45, 8, raylib::color::Color { r: 0, g: 0, b: 0, a: 130 },
+        Rectangle {
+            x: x - 1.0,
+            y: y + 2.0,
+            width: w + 2.0,
+            height: h,
+        },
+        0.45,
+        8,
+        raylib::color::Color {
+            r: 0,
+            g: 0,
+            b: 0,
+            a: 130,
+        },
     );
 
     // Paddle body: a rounded rectangle in the base color.
-    let body = Rectangle { x, y, width: w, height: h };
+    let body = Rectangle {
+        x,
+        y,
+        width: w,
+        height: h,
+    };
     d.draw_rectangle_rounded(body, 0.4, 8, base);
 
     // Vertical shading: the half tilted toward the viewer is brighter, the
@@ -1066,17 +1461,43 @@ fn draw_paddle(
     let light = lighten(base, 60);
     let dark = darken(base, 60);
     let half = (h / 2.0) - 1.0;
-    let (fwd_y, rcv_y) = if up { (y, y + h / 2.0) } else { (y + h / 2.0, y) };
+    let (fwd_y, rcv_y) = if up {
+        (y, y + h / 2.0)
+    } else {
+        (y + h / 2.0, y)
+    };
     d.draw_rectangle_rounded(
-        Rectangle { x: x + 2.0, y: rcv_y + 1.0, width: w - 4.0, height: half }, 0.5, 6, dark,
+        Rectangle {
+            x: x + 2.0,
+            y: rcv_y + 1.0,
+            width: w - 4.0,
+            height: half,
+        },
+        0.5,
+        6,
+        dark,
     );
     d.draw_rectangle_rounded(
-        Rectangle { x: x + 2.0, y: fwd_y + 1.0, width: w - 4.0, height: half }, 0.5, 6, light,
+        Rectangle {
+            x: x + 2.0,
+            y: fwd_y + 1.0,
+            width: w - 4.0,
+            height: half,
+        },
+        0.5,
+        6,
+        light,
     );
 
     // Bright gloss band + specular highlight near the forward edge.
     let band_y = if up { top_y + 5 } else { top_y + PADDLE_H - 12 };
-    d.draw_rectangle(cx - PADDLE_W / 2 + 4, band_y, PADDLE_W - 8, 6, lighten(base, 95));
+    d.draw_rectangle(
+        cx - PADDLE_W / 2 + 4,
+        band_y,
+        PADDLE_W - 8,
+        6,
+        lighten(base, 95),
+    );
     d.draw_circle(cx - 4, band_y + 2, 1.8, lighten(base, 130));
 }
 
@@ -1140,7 +1561,13 @@ fn find_program_start(prog: &PanelProgram) -> Option<u16> {
 
 /// Build a panel program from the current memory contents.
 /// Dumps `len` bytes starting at `start` into a program with deposit_next steps.
-fn memory_to_program(name: &str, description: &str, start: u16, len: u16, emu: &Imsai8080) -> PanelProgram {
+fn memory_to_program(
+    name: &str,
+    description: &str,
+    start: u16,
+    len: u16,
+    emu: &Imsai8080,
+) -> PanelProgram {
     let mut steps = Vec::new();
     // First byte uses deposit (sets address + data)
     let first_byte = emu.bus.mem_read(start);
@@ -1214,10 +1641,16 @@ fn boot_cpm(emu: &mut rust_imsai_emulator::Imsai8080) {
     }
 
     let bytes_loaded = mem_addr - CPMB;
-    eprintln!("Loaded {} sectors ({} bytes) into 0x{:04X}-0x{:04X}",
-        sectors_loaded, bytes_loaded, CPMB, CPMB + bytes_loaded);
+    eprintln!(
+        "Loaded {} sectors ({} bytes) into 0x{:04X}-0x{:04X}",
+        sectors_loaded,
+        bytes_loaded,
+        CPMB,
+        CPMB + bytes_loaded
+    );
 
     rust_imsai_emulator::Bios::install_jump_table(&mut emu.bus);
     emu.cpu.pc = CPMB;
     emu.cpu.sp = 0x0000;
 }
+
