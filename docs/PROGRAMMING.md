@@ -66,10 +66,9 @@ SEND: IN  0x01        ; DB 01 - read UART status
       RET             ; C9
 ```
 
-Note: TxRDY is **bit 0** (0x01) of the status register, not bit 1. The
-BIOS uses `ANI 0x01` for TX Ready and `ANI 0x01` for RX Ready as well
-(CONST checks if either is set). A common mistake is to use `ANI 0x02`,
-which checks RxRDY instead and will hang until a key is pressed.
+Note: TxRDY is **bit 0** (0x01) of the status register. A common mistake
+is to use `ANI 0x02`, which checks RxRDY instead and will hang until a key
+is pressed.
 
 ### Receiving a Character (Polling RX Ready)
 
@@ -82,32 +81,9 @@ RECV: IN  0x01        ; DB 01 - read UART status
       RET             ; C9
 ```
 
-### CP/M Console I/O (Calling BDOS via CALL 5)
-
-If a CP/M system is loaded, you can use BDOS function calls instead of
-talking to the UART directly. Put the function number in register C and
-any parameter in register DE, then CALL 5:
-
-| Function       | C   | Parameter                               | Returns       |
-| -------------- | --- | --------------------------------------- | ------------- |
-| Console output | 2   | E = character                           | Nothing       |
-| Console input  | 1   | Nothing                                 | A = character |
-| Print string   | 9   | DE = string address (terminated by `$`) | Nothing       |
-| Read string    | 10  | DE = buffer address                     | Buffer filled |
-
-Example: print "HELLO" using BDOS function 9:
-
-```
-        MVI C, 9        ; BDOS function: print string
-        LXI D, MSG      ; DE points to the message
-        CALL 5           ; call BDOS
-        JMP 0           ; warm boot back to CP/M
-MSG:    DB 'HELLO$'      ; CP/M strings end with $
-```
-
 ## Writing Programs
 
-You have three options, from most manual to least.
+You have two options.
 
 ### Option 1: Front Panel JSON Programs
 
@@ -177,27 +153,17 @@ Assemble your 8080 code with any assembler (z80asm, asm80, whatever produces
 raw binary output). Load the binary directly:
 
 ```bash
-# CLI mode: load binary at address 0x0000 (default)
-cargo run --release -- <disk_image.img>
+# CLI: load binary at address 0x0000 (default)
+cargo run --bin imsai-cli -- --load myprogram.bin
 
-# GUI mode: load binary at a specific address
-cargo run --bin imsai-panel -- --load myprogram.bin 0x100
+# CLI: load binary at a specific address
+cargo run --bin imsai-cli -- --load myprogram.bin 0x100
+
+# GUI: load binary at a specific address
+cargo run --bin imsai-gui -- --load myprogram.bin 0x100
 ```
 
 The `--load` flag takes a file path and an optional hex address (default 0x0000).
-
-### Option 3: CP/M .COM Files
-
-If you have a working CP/M disk image, .COM files execute at address 0x0100.
-Load the disk image instead:
-
-```bash
-cargo run --release -- <disk_image.img>
-```
-
-The boot sequence loads CCP and BDOS from the disk image and installs the
-custom BIOS at 0xFA00. The CP/M prompt (`A>`) reads commands from the console
-UART.
 
 ## Saving Programs
 
@@ -227,29 +193,30 @@ be loaded again with F2.
 ### From the CLI
 
 ```bash
-# Interactive terminal with a disk image
-./target/release/rust-imsai-emulator disk.img
+# Interactive terminal with a program
+./target/release/imsai-cli --program programs/hello-world.json
+
+# Interactive terminal with a raw binary
+./target/release/imsai-cli --load myprogram.bin 0x100
 
 # Batch mode (50M instructions, no TTY needed)
-./target/release/rust-imsai-emulator disk.img --batch
+./target/release/imsai-cli --program programs/hello-world.json --batch
 
 # Scripted test with pre-loaded keyboard input
-./target/release/rust-imsai-emulator disk.img --script --cmd "DIR\r"
+./target/release/imsai-cli --program programs/hello-world.json --script --cmd "DIR\r"
 ```
 
 ## Memory Map
 
-| Address Range | Contents                                        |
-| ------------- | ----------------------------------------------- |
-| 0x0000-0x00FF | Zero page: vectors, BDOS entry at 0x0005        |
-| 0x0100-0xE3FF | TPA (Transient Program Area, free for programs) |
-| 0xE400-0xEFFF | CCP (loaded from disk)                          |
-| 0xF000-0xF9FF | BDOS (loaded from disk)                         |
-| 0xFA00-0xFB2F | Custom BIOS (jump table plus routines)          |
-| 0xFB30-0xFC0F | DPH, DIRBUF, CSV, ALV buffers                   |
-
-For bare-metal programs (no CP/M), you have the full 64K address space.
+For bare-metal programs (no OS), you have the full 64K address space.
 Start your program at 0x0000 or 0x0100 and use the console UART directly.
+
+| Address Range | Contents                                     |
+| ------------- | -------------------------------------------- |
+| 0x0000-0xFFFF | 64K RAM (0xFF on power-up, floating bus)   |
+
+The emulator initializes memory to 0xFF, matching the real IMSAI's floating
+bus state. Programs should not assume memory is zeroed.
 
 ## Complete Example: Hello World
 
@@ -348,6 +315,20 @@ JSON version:
 }
 ```
 
+## Disk I/O
+
+The Tarbell floppy controller (FD1771) is accessed through ports 0x48-0x4B:
+
+| Port  | Function                                        |
+| ----- | ------------------------------------------------ |
+| 0x48  | Command/status register                          |
+| 0x49  | Track register                                   |
+| 0x4A  | Sector register                                  |
+| 0x4B  | Data register                                    |
+
+Disk images are 256,256 bytes (77 tracks x 26 sectors x 128 bytes/sector,
+IBM 3740 single-density 8" format).
+
 ## Instruction Set Quick Reference
 
 The IMSAI 8080 uses the Intel 8080 instruction set. Common instructions:
@@ -403,4 +384,3 @@ The IMSAI 8080 uses the Intel 8080 instruction set. Common instructions:
 
 5. **Check your jumps.** 8080 jumps are absolute addresses in little-endian
    format: `JMP 0x0100` assembles as `C3 00 01`, not `C3 01 00`.
-

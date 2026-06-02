@@ -1,22 +1,22 @@
-# IMSAI 8080 Hardware Accuracy Plan
+# IMSAI 8080 Hardware Documentation
 
 ## Goal
 
-Build a hardware-accurate IMSAI 8080 emulator. Every card and chip models
-real silicon. The machine responds exactly as a real IMSAI would with no
-software loaded: front panel switches, LEDs, and raw bus state.
+A hardware-accurate IMSAI 8080 emulator. Every card and chip models real
+silicon. The machine responds exactly as a real IMSAI would with no software
+loaded: front panel switches, LEDs, and raw bus state.
 
 ## Real IMSAI 8080 Hardware
 
 A bare IMSAI 8080 with no software is just:
 - CPU card (Intel 8080A @ 2MHz)
 - Memory card (RAM, initially 0xFF)
-- SIO-2 serial card (2x 8251A UART, unprogrammed at power-on)
+- SIO-2 serial card (2x Intel 8251A UART, unprogrammed at power-on)
 - Tarbell disk controller (FD1771, no disk spinning)
 - Front panel (switches + LEDs, your only interface)
 
-There is no ROM, no BIOS, no firmware. You toggle programs in from the
-front panel or boot from disk after manually keying in a bootstrap.
+There is no ROM, no BIOS, no firmware. You toggle programs in from the front
+panel or boot from disk after manually keying in a bootstrap.
 
 ## Front Panel (the defining IMSAI feature)
 
@@ -42,13 +42,13 @@ Front panel behavior:
 
 ## Chip Models (`src/chips/`)
 
-### Intel 8251A UART (`chips/uart8251.rs`) - DONE
+### Intel 8251A UART (`chips/uart8251.rs`)
 - Full mode/command/status register model
 - TX/RX data buffers with flow control
 - Error detection: parity, overrun, framing
 - 15 tests
 
-### WD FD1771 FDC (`chips/fd1771.rs`) - DONE
+### WD FD1771 FDC (`chips/fd1771.rs`)
 - All 4 command types (I-IV) with state machine
 - DRQ/INTRQ signaling
 - Per-drive head position tracking
@@ -56,41 +56,38 @@ Front panel behavior:
 
 ## Card Models (`src/cards/`)
 
-### MemoryCard (`cards/memory.rs`) - DONE
+### MemoryCard (`cards/memory.rs`)
 - 64K RAM, initialized to 0xFF (floating bus state)
 - 5 tests
 
-### SerialCard (`cards/serial.rs`) - DONE
+### SerialCard (`cards/serial.rs`)
 - IMSAI SIO-2: two 8251A UART channels
 - Ports 0x00-0x03 + aliases 0x79/0x7B
 - 10 tests
 
-### TarbellCard (`cards/tarbell.rs`) - DONE
+### TarbellCard (`cards/tarbell.rs`)
 - FD1771 + board-level port decoding
 - Ports 0x48-0x4B + aliases 0xF8-0xFF
 - 8 tests
 
-### FrontPanelCard (`cards/front_panel.rs`) - TODO
+### FrontPanel (`cards/front_panel.rs`)
 - 16 address switches + 8 data switches
 - RUN/STOP, SINGLE STEP, EXAMINE, DEPOSIT, EXAMINE NEXT, DEPOSIT NEXT
 - 16 address LEDs + 8 data LEDs + status LEDs
 - Direct memory access for examine/deposit (bypasses CPU)
 - Single step: run CPU for one M1 cycle, then freeze
-- Tests: switch/LED state, examine/deposit operations, run/stop, single step
+- 22 tests
 
 ## Bus (`bus.rs`)
 
-- Cycle counter for timing (TODO)
 - I/O dispatch by card port ownership
 - Memory dispatch by card address ownership
-- Front panel can freeze bus on STOP
-- Tests: cycle counting, dispatch, address decode
+- Front panel has direct bus access (not a Card trait implementor)
+- Convenience methods for console/tarbell card access
 
-## Implementation Order
+## Disk Image (`disk.rs`)
 
-1. ~~Chip models: 8251A UART, FD1771 FDC~~ - DONE
-2. ~~Card restructure: cards/ directory, chip-based models~~ - DONE
-3. Front panel card (the core hardware interface)
-4. Bus update: cycle tracking, front panel bus freeze
-5. Remove all CP/M/BIOS/BDOS references from hardware code
-6. Clean main.rs to start in front panel mode (no boot sequence)
+- CP/M 2.2 filesystem support for IBM 3740 single-density 8" format
+- 77 tracks, 26 sectors, 128 bytes/sector (256,256 bytes total)
+- 6:1 interleave sector skew table (canonical, defined in `dpb.rs`)
+- Read/write physical and logical sectors
