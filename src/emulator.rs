@@ -56,19 +56,17 @@ impl Imsai8080 {
     /// Should only be called when the front panel is in RUN mode
     /// or for single-step operations.
     pub fn step(&mut self) -> u32 {
-        // Clear transient LEDs before stepping
         self.panel.clear_transient_leds();
 
         let pc_before = self.cpu.pc;
         let op_byte = self.bus.mem_read(pc_before);
         let cycles = self.cpu.step(&mut self.bus);
 
-        // Update the front panel with what happened. The data bus shows the
-        // byte at the (new) PC -- the opcode the next M1 cycle will fetch.
+        // The data bus shows the byte at the (new) PC -- the opcode the
+        // next M1 cycle will fetch.
         let data_bus = self.bus.mem_read(self.cpu.pc);
         self.panel.update_run_leds(&self.cpu, data_bus);
 
-        // Check if this was an I/O instruction and log it
         if op_byte == 0xD3 {
             // OUT port,A
             let port = self.bus.mem_read(pc_before + 1);
@@ -77,15 +75,6 @@ impl Imsai8080 {
             // IN A,port
             let port = self.bus.mem_read(pc_before + 1);
             self.panel.log_io_read(self.cpu.cycles, port, self.cpu.a);
-        }
-
-        // Check if this was a memory instruction and log appropriately
-        // (simplified: just track reads/writes at the instruction level)
-        let is_write = self.is_memory_write_instruction(op_byte);
-        if is_write {
-            // For writes, we log the target address
-            // The actual data is hard to get without deep CPU hooks,
-            // so we just note that a write happened
         }
 
         cycles
@@ -124,20 +113,6 @@ impl Imsai8080 {
     /// Updates LEDs to show the new PC and the byte at that address.
     pub fn single_step(&mut self) {
         self.panel.do_single_step(&mut self.bus, &mut self.cpu);
-    }
-
-    /// Determine if an instruction writes to memory (simplified check).
-    ///
-    /// This is used for front panel LED updates and I/O logging.
-    /// Not all cases are covered, but the common ones are.
-    fn is_memory_write_instruction(&self, op: u8) -> bool {
-        matches!(op,
-            0x36 | // MVI M
-            0x22 | // SHLD
-            0x32 | // STA
-            0x02 | // STAX B
-            0x12    // STAX D
-        )
     }
 }
 

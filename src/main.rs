@@ -1143,7 +1143,6 @@ fn run_hybrid_test(emu: &mut rust_imsai_emulator::Imsai8080, max_instructions: u
     println!("Ever saw console output: {}", ever_saw_console_out);
     println!("Ever saw disk output: {}", ever_saw_disk_out);
 
-    // Build final display string from captured chars
     let final_display: String = video_chars.iter().collect();
     if !final_display.is_empty() {
         println!("\nFinal display content:\n---\n{}\n---", final_display);
