@@ -1100,7 +1100,7 @@ fn main() {
         // === Bottom bar: machine state + keyboard shortcuts ===
         // Part of the layout (REF_W x REF_H); scale() below scales it with
         // the rest of the panel.
-        d.draw_rectangle(0, REF_H - 22, REF_W, 22, rgb(28, 28, 30));
+        d.draw_rectangle(0, REF_H - 28, REF_W, 28, rgb(28, 28, 30));
         let cpu = &emu.cpu;
         let state = if cpu.halted {
             "HALT"
@@ -1114,12 +1114,12 @@ fn main() {
             state, cpu.pc, cpu.sp, cpu.a, cpu.b, cpu.c, cpu.d, cpu.e, cpu.h, cpu.l,
             program_name, cycles,
         );
-        d.draw_text(&line, 10, REF_H - 16, 11, txt_dim);
+        d.draw_text(&line, 10, REF_H - 22, 14, txt_dim);
         d.draw_text(
             "F5 run/stop  F2 load  F3 save  R reset",
-            REF_W - 320,
-            REF_H - 16,
-            11,
+            REF_W - 400,
+            REF_H - 22,
+            14,
             txt_dim,
         );
 
