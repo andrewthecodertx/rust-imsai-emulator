@@ -481,9 +481,10 @@ fn main() {
                 PickerAction::Load(path) => {
                     match load_program_file(&path) {
                         Ok(prog) => {
-                            eprintln!("Loaded: {}", prog.name);
+                            eprintln!("Loaded: {} (PC=0x{:04X}, running={})", prog.name, emu.cpu.pc, emu.panel.is_running());
                             emu = Imsai8080::new();
                             execute_panel_program(&mut emu, &prog);
+                            eprintln!("After execute: PC=0x{:04X}, running={}", emu.cpu.pc, emu.panel.is_running());
                             if let Some(start_addr) = find_program_start(&prog) {
                                 for i in 0..16 {
                                     addr_sw[i] = (start_addr >> (15 - i)) & 1 != 0;
@@ -494,8 +495,9 @@ fn main() {
                             term = [[0x20u8; TERM_COLS]; TERM_ROWS];
                             tcx = 0;
                             tcy = 0;
-                            running = false;
-                            status_msg = format!("Loaded: {}", program_name);
+                            // If the program has a "run" step, the front panel is already in RUN mode
+                            running = emu.panel.is_running();
+                            status_msg = format!("Loaded: {} (PC={:04X})", program_name, emu.cpu.pc);
                             status_msg_timer = 180;
                         }
                         Err(e) => {
