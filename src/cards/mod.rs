@@ -15,6 +15,7 @@ mod serial;
 mod tarbell;
 
 pub use front_panel::FrontPanel;
+pub use front_panel::IoEvent;
 pub use front_panel::PanelLeds;
 pub use front_panel::PanelSwitch;
 pub use front_panel::RunState;

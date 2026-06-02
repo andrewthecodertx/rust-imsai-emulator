@@ -35,7 +35,7 @@ pub mod system;
 // Re-export the main components
 pub use bios::Bios;
 pub use bus::ImsaiBus;
-pub use cards::{Card, FrontPanel, MemoryCard, PanelLeds, PanelSwitch, RunState, SerialCard, TarbellCard};
+pub use cards::{Card, FrontPanel, IoEvent, MemoryCard, PanelLeds, PanelSwitch, RunState, SerialCard, TarbellCard};
 pub use chips::Fd1771;
 pub use chips::Uart8251;
 pub use disk::DiskImage;

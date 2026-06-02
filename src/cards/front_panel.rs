@@ -1,29 +1,30 @@
 //! IMSAI 8080 front panel (switches and LEDs)
 //!
-//! The IMSAI 8080 front panel is the defining hardware feature of the machine.
-//! With no ROM, no BIOS, and no firmware, the front panel is your only
-//! interface to hardware. You use it to:
+//! The IMSAI 8080 front panel is NOT an S-100 card. It's a separate circuit
+//! that directly drives and monitors the S-100 bus control lines.
 //!
-//! - Examine memory: set 16 address switches, press EXAMINE, read data LEDs
-//! - Deposit memory: set address + data switches, press DEPOSIT
-//! - Run a program: set PC via examine/deposit, toggle RUN
-//! - Single-step: press SINGLE STEP to execute one instruction
-//! - Stop: toggle STOP to halt the CPU
+//! In a real IMSAI, the front panel connects to these S-100 signals:
 //!
-//! The front panel connects directly to the S-100 bus. In STOP mode, it
-//! controls the bus (address and data lines). In RUN mode, the CPU drives
-//! the bus and the panel just monitors (LEDs follow the bus).
+//! Address bus (A0-A15):
+//!   - STOP mode: panel drives the address bus from the toggle switches
+//!   - RUN mode: panel monitors the address bus (shows CPU address on LEDs)
 //!
-//! Switch layout (physical order, left to right):
-//! - 16 address toggle switches (A15..A0, up=1, down=0)
-//! - 8 data toggle switches (D7..D0, up=1, down=0)
-//! - Function switches: RUN/STOP, SINGLE STEP, EXAMINE, DEPOSIT,
-//!   EXAMINE NEXT, DEPOSIT NEXT
+//! Data bus (D0-D7):
+//!   - EXAMINE: panel reads data bus into data LEDs
+//!   - DEPOSIT: panel writes data switches onto data bus
+//!   - RUN mode: panel monitors data bus (shows CPU data on LEDs)
 //!
-//! LED layout:
-//! - 16 address LEDs (show current address bus)
-//! - 8 data LEDs (show current data bus)
-//! - Status LEDs: RUN, M1, WAIT, INT, HLDA, POWER
+//! Control signals:
+//!   - ~RUN/STOP flip-flop: holds CPU in WAIT when STOP
+//!   - SINGLE STEP: releases WAIT for one M1 cycle, then re-asserts
+//!   - SSWN (sense switches): optional port FF input
+//!   - ~M1: instruction fetch cycle (shown on LED)
+//!   - ~MEMR: memory read (used for examine)
+//!   - MWRT: memory write (used for deposit)
+//!
+//! The panel does NOT go through any I/O port. It has direct bus access.
+//! This is what makes it useful as a hardware debugger: it can examine
+//! and deposit memory even if nothing works (no CPU, no firmware, nothing).
 
 /// Front panel function switches.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -45,38 +46,72 @@ pub enum PanelSwitch {
 /// Front panel status LEDs.
 #[derive(Debug, Clone, Default)]
 pub struct PanelLeds {
-    /// 16 address LEDs (true = ON)
+    /// 16 address LEDs (true = ON, MSB first)
     pub address: [bool; 16],
-    /// 8 data LEDs (true = ON)
+    /// 8 data LEDs (true = ON, MSB first)
     pub data: [bool; 8],
-    /// CPU is running
+    /// CPU is running (RUN LED)
     pub run: bool,
-    /// Machine cycle 1 active (instruction fetch)
+    /// Machine cycle 1: instruction fetch (M1 LED)
     pub m1: bool,
-    /// CPU in wait state
+    /// CPU in wait state (WAIT LED)
     pub wait: bool,
-    /// Interrupt acknowledge
+    /// Interrupt acknowledge (INT LED)
     pub int: bool,
-    /// Hold acknowledge (DMA)
+    /// Hold acknowledge, DMA in progress (HLDA LED)
     pub hlda: bool,
-    /// Power on
+    /// Power on (POWER LED)
     pub power: bool,
+    /// Memory read active (MEMR LED, inverted from S-100 ~MEMR)
+    pub memr: bool,
+    /// Memory write active (MWRT LED)
+    pub mwrt: bool,
+    /// I/O read active (shows when a card is being read)
+    pub ior: bool,
+    /// I/O write active (shows when a card is being written)
+    pub iow: bool,
 }
 
 /// CPU run state controlled by the front panel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RunState {
-    /// CPU halted, front panel controls bus
+    /// CPU halted, front panel drives address/data bus
     Stopped,
     /// CPU executing, front panel monitors bus
     Running,
 }
 
+/// I/O event logged by the bus-monitoring front panel.
+///
+/// When the panel is in RUN mode, it watches all bus transactions.
+/// This lets you see what the CPU is doing: which addresses it reads,
+/// which I/O ports it accesses, etc.
+#[derive(Debug, Clone)]
+pub struct IoEvent {
+    /// Cycle count when this event happened
+    pub cycle: u64,
+    /// Address bus value
+    pub address: u16,
+    /// Data bus value (what was read or written)
+    pub data: u8,
+    /// Whether this was an I/O operation (vs memory)
+    pub is_io: bool,
+    /// Whether this was a write (vs read)
+    pub is_write: bool,
+    /// Whether this was an output to a port (OUT instruction)
+    pub is_output: bool,
+}
+
 /// IMSAI 8080 front panel.
 ///
-/// Models the physical front panel with toggle switches and LEDs.
-/// The panel directly accesses the S-100 bus for examine/deposit
-/// operations (no CPU involvement needed).
+/// The front panel directly controls and monitors the S-100 bus.
+/// In STOP mode, it drives the address/data lines for examine/deposit.
+/// In RUN mode, it monitors the bus passively, updating LEDs to show
+/// CPU activity.
+///
+/// The panel also logs I/O events, making it a hardware debugger
+/// for the S-100 cards. You can see exactly which ports the CPU
+/// reads/writes, and which memory addresses it accesses.
 pub struct FrontPanel {
     /// 16 address toggle switches (bit 15 = A15 = MSB)
     address_switches: u16,
@@ -88,6 +123,16 @@ pub struct FrontPanel {
     run_state: RunState,
     /// Pending switch actions (pressed since last update)
     pending_actions: Vec<PanelSwitch>,
+    /// Circular buffer of recent I/O events for monitoring
+    io_log: Vec<IoEvent>,
+    /// Maximum number of I/O events to keep
+    io_log_capacity: usize,
+    /// Total bus cycles seen while running
+    cycle_count: u64,
+    /// Address seen on last bus transaction (for LED monitoring)
+    last_address: u16,
+    /// Data seen on last bus transaction (for LED monitoring)
+    last_data: u8,
 }
 
 impl Default for FrontPanel {
@@ -105,28 +150,37 @@ impl FrontPanel {
             leds: PanelLeds::default(),
             run_state: RunState::Stopped,
             pending_actions: Vec::new(),
+            io_log: Vec::new(),
+            io_log_capacity: 256,
+            cycle_count: 0,
+            last_address: 0,
+            last_data: 0,
         };
         panel.leds.power = true;
-        panel.update_leds_from_state();
+        panel.leds.wait = true; // CPU is in WAIT state on power-on
         panel
     }
 
     // -------------------------------------------------------------------
-    // Switch setters (the host terminal/user sets these)
+    // Switch setters (the user/terminal sets these)
     // -------------------------------------------------------------------
 
     /// Set the 16 address toggle switches.
-    /// Updates address LEDs to match (hardwired in real hardware).
+    /// Address LEDs update immediately (hardwired in real hardware).
     pub fn set_address_switches(&mut self, addr: u16) {
         self.address_switches = addr;
-        self.leds.address = u16_to_bool_array(addr);
+        if self.run_state == RunState::Stopped {
+            self.leds.address = u16_to_bool_array(addr);
+        }
     }
 
     /// Set the 8 data toggle switches.
-    /// Updates data LEDs to match (hardwired in real hardware).
+    /// Data LEDs update immediately (hardwired in real hardware).
     pub fn set_data_switches(&mut self, data: u8) {
         self.data_switches = data;
-        self.leds.data = u8_to_bool_array(data);
+        if self.run_state == RunState::Stopped {
+            self.leds.data = u8_to_bool_array(data);
+        }
     }
 
     /// Get the current address switch value.
@@ -169,6 +223,110 @@ impl FrontPanel {
         self.run_state == RunState::Stopped
     }
 
+    /// Get recent I/O events logged while the CPU was running.
+    pub fn io_log(&self) -> &[IoEvent] {
+        &self.io_log
+    }
+
+    /// Clear the I/O event log.
+    pub fn clear_io_log(&mut self) {
+        self.io_log.clear();
+    }
+
+    /// Get total cycle count since last reset.
+    pub fn cycle_count(&self) -> u64 {
+        self.cycle_count
+    }
+
+    // -------------------------------------------------------------------
+    // Bus monitoring (called during CPU execution)
+    // -------------------------------------------------------------------
+
+    /// Log an I/O read event (IN instruction).
+    /// Call this from the bus when the CPU reads an I/O port.
+    pub fn log_io_read(&mut self, cycle: u64, port: u8, value: u8) {
+        self.cycle_count = cycle;
+        self.last_address = port as u16;
+        self.last_data = value;
+        self.leds.ior = true;
+        self.leds.iow = false;
+
+        if self.io_log.len() >= self.io_log_capacity {
+            self.io_log.remove(0);
+        }
+        self.io_log.push(IoEvent {
+            cycle,
+            address: port as u16,
+            data: value,
+            is_io: true,
+            is_write: false,
+            is_output: false,
+        });
+    }
+
+    /// Log an I/O write event (OUT instruction).
+    /// Call this from the bus when the CPU writes to an I/O port.
+    pub fn log_io_write(&mut self, cycle: u64, port: u8, value: u8) {
+        self.cycle_count = cycle;
+        self.last_address = port as u16;
+        self.last_data = value;
+        self.leds.iow = true;
+        self.leds.ior = false;
+        self.leds.mwrt = false; // I/O write, not memory write
+
+        if self.io_log.len() >= self.io_log_capacity {
+            self.io_log.remove(0);
+        }
+        self.io_log.push(IoEvent {
+            cycle,
+            address: port as u16,
+            data: value,
+            is_io: true,
+            is_write: true,
+            is_output: true,
+        });
+    }
+
+    /// Log a memory read event.
+    pub fn log_mem_read(&mut self, cycle: u64, addr: u16, value: u8) {
+        self.cycle_count = cycle;
+        self.last_address = addr;
+        self.last_data = value;
+        self.leds.memr = true;
+        self.leds.mwrt = false;
+    }
+
+    /// Log a memory write event.
+    pub fn log_mem_write(&mut self, cycle: u64, addr: u16, value: u8) {
+        self.cycle_count = cycle;
+        self.last_address = addr;
+        self.last_data = value;
+        self.leds.mwrt = true;
+        self.leds.memr = false;
+    }
+
+    /// Update LEDs to reflect current bus state during RUN mode.
+    /// Call this after each CPU step to show live bus activity.
+    pub fn update_run_leds(&mut self, cpu: &intel8080::Cpu8080) {
+        if self.run_state == RunState::Running {
+            self.leds.address = u16_to_bool_array(cpu.pc);
+            self.leds.run = true;
+            self.leds.wait = false;
+        }
+    }
+
+    /// Clear transient status LEDs (M1, IOR, IOW, MEMR, MWRT).
+    /// These pulse on during bus transactions and should be cleared
+    /// between cycles in a real panel. For our model, clear them
+    /// before each CPU step so they reflect only the current instruction.
+    pub fn clear_transient_leds(&mut self) {
+        self.leds.m1 = false;
+        self.leds.ior = false;
+        self.leds.iow = false;
+        self.leds.memr = false;
+        self.leds.mwrt = false;
+    }
+
     // -------------------------------------------------------------------
     // Action processing (called each emulator tick)
     // -------------------------------------------------------------------
@@ -178,16 +336,14 @@ impl FrontPanel {
     /// Takes a mutable reference to the bus (for examine/deposit) and
     /// the CPU (for run/stop/single-step control).
     ///
-    /// Returns true if the CPU should execute (RUN or SINGLE STEP).
-    /// Returns false if the CPU should stay halted (STOP).
+    /// Returns true if the CPU should execute (RUN mode active).
+    /// Returns false if the CPU should stay halted (STOP mode).
     pub fn process_actions(
         &mut self,
         bus: &mut crate::bus::ImsaiBus,
         cpu: &mut intel8080::Cpu8080,
     ) -> bool {
         let mut should_run = self.run_state == RunState::Running;
-
-        // Drain pending actions first to avoid double borrow
         let actions: Vec<PanelSwitch> = self.pending_actions.drain(..).collect();
 
         for action in actions {
@@ -196,22 +352,25 @@ impl FrontPanel {
                     if self.run_state == RunState::Stopped {
                         self.run_state = RunState::Running;
                         should_run = true;
-                        // When entering RUN, set CPU PC to address switches
-                        // (this is how a real IMSAI front panel works:
-                        //  the RUN switch starts execution from the current
-                        //  address on the bus, which is the address switches)
+                        // In a real IMSAI, pressing RUN starts the CPU
+                        // from whatever address is on the bus. The CPU
+                        // register PC may have been set by previous
+                        // examine/deposit operations. We load the
+                        // address switches into PC as the start address.
                         cpu.pc = self.address_switches;
+                        self.leds.wait = false;
                     } else {
                         self.run_state = RunState::Stopped;
                         should_run = false;
+                        self.leds.wait = true;
                     }
                 }
                 PanelSwitch::SingleStep => {
-                    // Single step: execute one instruction, then stop
-                    // The caller should step the CPU once, and we'll
-                    // set state back to Stopped after.
-                    should_run = false; // We return false; caller handles the step
+                    // Single step: advance one instruction, then stop.
+                    // The caller handles the actual CPU step.
+                    should_run = false;
                     self.run_state = RunState::Stopped;
+                    self.leds.wait = true;
                 }
                 PanelSwitch::Examine => {
                     self.examine(bus);
@@ -221,68 +380,82 @@ impl FrontPanel {
                 }
                 PanelSwitch::ExamineNext => {
                     self.address_switches = self.address_switches.wrapping_add(1);
+                    self.leds.address = u16_to_bool_array(self.address_switches);
                     self.examine(bus);
                 }
                 PanelSwitch::DepositNext => {
                     self.address_switches = self.address_switches.wrapping_add(1);
+                    self.leds.address = u16_to_bool_array(self.address_switches);
                     self.deposit(bus);
                 }
             }
         }
 
-        self.update_leds_from_state();
+        self.leds.run = self.run_state == RunState::Running;
+        self.leds.power = true;
         should_run
     }
 
-    /// Process a single step: execute one CPU instruction and update LEDs.
+    /// Execute a single CPU step and update the front panel.
+    ///
+    /// This is the single-step operation: run the CPU for one instruction,
+    /// then stop. The address and data LEDs show the new PC and the
+    /// byte at that address. Status LEDs show what happened.
     pub fn do_single_step(
         &mut self,
         bus: &mut crate::bus::ImsaiBus,
         cpu: &mut intel8080::Cpu8080,
     ) {
-        // Execute one instruction
+        let pc_before = cpu.pc;
         cpu.step(bus);
 
-        // Update LEDs to show new CPU state
+        // Update LEDs to show the new CPU state
         self.leds.address = u16_to_bool_array(cpu.pc);
         self.leds.data = u8_to_bool_array(bus.mem_read(cpu.pc));
-        self.leds.m1 = true; // We just fetched an instruction
+        self.leds.m1 = true; // Just completed an instruction fetch
         self.leds.run = false; // Stopped after single step
+        self.leds.wait = true; // Back in wait state
+        self.address_switches = cpu.pc; // Update switches to show new address
+
+        // Log this step
+        self.io_log.push(IoEvent {
+            cycle: cpu.cycles,
+            address: pc_before,
+            data: bus.mem_read(pc_before),
+            is_io: false,
+            is_write: false,
+            is_output: false,
+        });
     }
 
     // -------------------------------------------------------------------
     // Internal: examine/deposit operations
     // -------------------------------------------------------------------
 
-    /// Examine: read the byte at the address switch position and
-    /// display it on the data LEDs.
+    /// Examine: put the address switches on the address bus, assert
+    /// MEMR, and latch the data bus into the data LEDs.
     fn examine(&mut self, bus: &crate::bus::ImsaiBus) {
-        let data = bus.mem_read(self.address_switches);
-        self.leds.address = u16_to_bool_array(self.address_switches);
+        let addr = self.address_switches;
+        let data = bus.mem_read(addr);
+
+        self.leds.address = u16_to_bool_array(addr);
         self.leds.data = u8_to_bool_array(data);
+        self.leds.memr = true; // MEMR strobe
+        self.leds.mwrt = false;
     }
 
-    /// Deposit: write the data switch value into memory at the
-    /// address switch position.
+    /// Deposit: put the address switches on the address bus, put the
+    /// data switches on the data bus, and assert MWRT.
     fn deposit(&mut self, bus: &mut crate::bus::ImsaiBus) {
-        bus.mem_write(self.address_switches, self.data_switches);
-        self.leds.address = u16_to_bool_array(self.address_switches);
-        self.leds.data = u8_to_bool_array(self.data_switches);
-    }
+        let addr = self.address_switches;
+        let data = self.data_switches;
 
-    /// Update LEDs from current run state.
-    ///
-    /// When stopped and no examine/deposit was just performed,
-    /// LEDs show the switch positions. After examine/deposit,
-    /// LEDs show the examined/deposited data.
-    fn update_leds_from_state(&mut self) {
-        self.leds.run = self.run_state == RunState::Running;
-        self.leds.power = true;
-        // Note: do NOT overwrite address/data LEDs here.
-        // examine() and deposit() set the LEDs directly.
-        // Switch-to-LED display is handled in new() and in
-        // set_address_switches/set_data_switches if the user
-        // wants switch positions shown.
+        bus.mem_write(addr, data);
+
+        self.leds.address = u16_to_bool_array(addr);
+        self.leds.data = u8_to_bool_array(data);
+        self.leds.mwrt = true; // MWRT strobe
+        self.leds.memr = false;
     }
 }
 
@@ -340,6 +513,7 @@ mod tests {
         assert_eq!(panel.data_switches(), 0);
         assert!(panel.leds().power);
         assert!(!panel.leds().run);
+        assert!(panel.leds().wait); // CPU is waiting on power-on
     }
 
     #[test]
@@ -347,6 +521,8 @@ mod tests {
         let mut panel = FrontPanel::new();
         panel.set_address_switches(0x1234);
         assert_eq!(panel.address_switches(), 0x1234);
+        // LEDs should update when stopped
+        assert_eq!(bool_array_to_u16(panel.leds().address), 0x1234);
     }
 
     #[test]
@@ -354,13 +530,14 @@ mod tests {
         let mut panel = FrontPanel::new();
         panel.set_data_switches(0xAB);
         assert_eq!(panel.data_switches(), 0xAB);
+        // LEDs should update when stopped
+        assert_eq!(bool_array_to_u8(panel.leds().data), 0xAB);
     }
 
     #[test]
-    fn test_examine_and_deposit() {
+    fn test_examine_reads_memory() {
         let mut panel = FrontPanel::new();
         let mut bus = crate::bus::ImsaiBus::new();
-        // CPU is not needed for examine/deposit, pass a dummy
         let mut cpu = intel8080::Cpu8080::new();
 
         // Write a byte to memory
@@ -371,13 +548,16 @@ mod tests {
         panel.press_switch(PanelSwitch::Examine);
         panel.process_actions(&mut bus, &mut cpu);
 
-        // Data LEDs should show 0x42
+        // Data LEDs should show 0x42 (the byte in memory)
         assert_eq!(bool_array_to_u8(panel.leds().data), 0x42);
+        // Address LEDs should show 0x00FF
         assert_eq!(bool_array_to_u16(panel.leds().address), 0x00FF);
+        // MEMR LED should be set (examine strobes it)
+        assert!(panel.leds().memr);
     }
 
     #[test]
-    fn test_deposit() {
+    fn test_deposit_writes_memory() {
         let mut panel = FrontPanel::new();
         let mut bus = crate::bus::ImsaiBus::new();
         let mut cpu = intel8080::Cpu8080::new();
@@ -388,8 +568,11 @@ mod tests {
         panel.press_switch(PanelSwitch::Deposit);
         panel.process_actions(&mut bus, &mut cpu);
 
+        // MWRT LED should be set (deposit strobes it)
+        assert!(panel.leds().mwrt);
+
         // Read it back via examine
-        panel.set_data_switches(0x00); // Clear data switches
+        panel.set_data_switches(0x00);
         panel.press_switch(PanelSwitch::Examine);
         panel.process_actions(&mut bus, &mut cpu);
 
@@ -399,7 +582,7 @@ mod tests {
     }
 
     #[test]
-    fn test_examine_next() {
+    fn test_examine_next_auto_increments() {
         let mut panel = FrontPanel::new();
         let mut bus = crate::bus::ImsaiBus::new();
         let mut cpu = intel8080::Cpu8080::new();
@@ -422,7 +605,7 @@ mod tests {
     }
 
     #[test]
-    fn test_deposit_next() {
+    fn test_deposit_next_auto_increments() {
         let mut panel = FrontPanel::new();
         let mut bus = crate::bus::ImsaiBus::new();
         let mut cpu = intel8080::Cpu8080::new();
@@ -452,6 +635,7 @@ mod tests {
 
         // Start in STOPPED state
         assert!(panel.is_stopped());
+        assert!(panel.leds().wait);
 
         // Press RUN/STOP to enter RUN
         panel.set_address_switches(0x0100);
@@ -461,6 +645,7 @@ mod tests {
         assert!(panel.is_running());
         assert!(should_run);
         assert_eq!(cpu.pc, 0x0100); // PC set to address switches
+        assert!(!panel.leds().wait); // WAIT LED off when running
 
         // Press RUN/STOP again to enter STOP
         panel.press_switch(PanelSwitch::RunStop);
@@ -468,6 +653,7 @@ mod tests {
 
         assert!(panel.is_stopped());
         assert!(!should_run);
+        assert!(panel.leds().wait); // WAIT LED on when stopped
     }
 
     #[test]
@@ -484,7 +670,7 @@ mod tests {
     }
 
     #[test]
-    fn test_leds_show_switches_when_stopped() {
+    fn test_leds_mirror_switches_in_stop_mode() {
         let mut panel = FrontPanel::new();
         panel.set_address_switches(0xBEEF);
         panel.set_data_switches(0xDE);
@@ -492,6 +678,22 @@ mod tests {
         // LEDs should mirror the switches when stopped
         assert_eq!(bool_array_to_u16(panel.leds().address), 0xBEEF);
         assert_eq!(bool_array_to_u8(panel.leds().data), 0xDE);
+    }
+
+    #[test]
+    fn test_leds_show_examined_data_not_switches() {
+        let mut panel = FrontPanel::new();
+        let mut bus = crate::bus::ImsaiBus::new();
+        let mut cpu = intel8080::Cpu8080::new();
+
+        // Set data switches to 0x00, but memory has 0xFF (uninitialized)
+        panel.set_data_switches(0x00);
+        panel.set_address_switches(0x1234);
+        panel.press_switch(PanelSwitch::Examine);
+        panel.process_actions(&mut bus, &mut cpu);
+
+        // Data LEDs should show memory content (0xFF), NOT the switches (0x00)
+        assert_eq!(bool_array_to_u8(panel.leds().data), 0xFF);
     }
 
     #[test]
@@ -525,24 +727,52 @@ mod tests {
     }
 
     #[test]
-    fn test_multiple_actions_queued() {
+    fn test_sequential_deposit_and_examine() {
         let mut panel = FrontPanel::new();
         let mut bus = crate::bus::ImsaiBus::new();
         let mut cpu = intel8080::Cpu8080::new();
 
-        // Deposit at 0x0100
+        // Deposit at 0x0100, then deposit next at 0x0101
         panel.set_address_switches(0x0100);
         panel.set_data_switches(0x11);
         panel.press_switch(PanelSwitch::Deposit);
         panel.process_actions(&mut bus, &mut cpu);
 
-        assert_eq!(bus.mem_read(0x0100), 0x11);
-
-        // Then deposit next at 0x0101 (auto-increment address)
         panel.set_data_switches(0x22);
         panel.press_switch(PanelSwitch::DepositNext);
         panel.process_actions(&mut bus, &mut cpu);
 
+        assert_eq!(bus.mem_read(0x0100), 0x11);
         assert_eq!(bus.mem_read(0x0101), 0x22);
+    }
+
+    #[test]
+    fn test_io_log_tracking() {
+        let mut panel = FrontPanel::new();
+
+        // Log an I/O read event
+        panel.log_io_read(100, 0x01, 0x42);
+        assert_eq!(panel.io_log().len(), 1);
+        assert_eq!(panel.io_log()[0].address, 0x0001);
+        assert_eq!(panel.io_log()[0].data, 0x42);
+        assert!(panel.io_log()[0].is_io);
+        assert!(!panel.io_log()[0].is_write);
+
+        // Log an I/O write event
+        panel.log_io_write(200, 0x00, 0x48);
+        assert_eq!(panel.io_log().len(), 2);
+        assert_eq!(panel.io_log()[1].address, 0x0000);
+        assert_eq!(panel.io_log()[1].data, 0x48);
+        assert!(panel.io_log()[1].is_io);
+        assert!(panel.io_log()[1].is_write);
+    }
+
+    #[test]
+    fn test_cycle_count() {
+        let mut panel = FrontPanel::new();
+        assert_eq!(panel.cycle_count(), 0);
+
+        panel.log_io_read(500, 0x01, 0x00);
+        assert_eq!(panel.cycle_count(), 500);
     }
 }
