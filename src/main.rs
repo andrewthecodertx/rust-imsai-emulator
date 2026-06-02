@@ -513,6 +513,23 @@ fn run_terminal(emu: &mut rust_imsai_emulator::Imsai8080) {
     print!("\r\nIMSAI 8080 Terminal\r\nPress Ctrl+] to exit, Ctrl+K for commands\r\n---\r\n");
     stdout.flush().ok();
 
+    // If no program is loaded (memory is 0xFF at address 0), enter command mode immediately
+    if emu.bus.mem_read(0x0000) == 0xFF && emu.cpu.pc == 0x0000 {
+        print!("\r\nNo program loaded. Enter command mode.\r\n");
+        stdout.flush().ok();
+        handle_command_mode(emu, &mut stdout, &mut program_name);
+        if emu.bus.mem_read(0x0000) == 0xFF && emu.cpu.pc == 0x0000 {
+            // Still nothing loaded - just exit
+            println!("\r\nNo program loaded. Use --load, --program, or Ctrl+K to load one.\r\n");
+            stdout.execute(LeaveAlternateScreen).ok();
+            disable_raw_mode().ok();
+            return;
+        }
+        // Program was loaded via command mode, resume
+        print!("\r\n--- Resuming execution ---\r\n");
+        stdout.flush().ok();
+    }
+
     let batch_size: u64 = 5000;
     let idle_sleep = std::time::Duration::from_millis(5);
     let poll_timeout = std::time::Duration::from_millis(0);
