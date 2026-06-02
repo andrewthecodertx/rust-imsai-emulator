@@ -492,42 +492,39 @@ fn handle_command_mode(
     stdout.flush().ok();
 }
 
-/// Interactive terminal mode: raw terminal, real-time keyboard input, live console output.
+/// Helper: save memory to imsai_memory.json
+fn save_memory(emu: &mut rust_imsai_emulator::Imsai8080) {
+    let mem_path = std::path::Path::new("imsai_memory.json");
+    match save_memory_to_file(&emu.bus.memory().ram, mem_path) {
+        Ok(()) => eprintln!("Memory saved to {}", mem_path.display()),
+        Err(e) => eprintln!("Warning: failed to save {}: {}", mem_path.display(), e),
+    }
+}
+
+/// Interactive terminal mode: TUI with 80x24 CRT display and status bar.
 fn run_terminal(emu: &mut rust_imsai_emulator::Imsai8080) {
     let mut program_name = String::new();
-    // Try to enable raw mode; fall back to batch mode if no TTY
     if enable_raw_mode().is_err() {
         eprintln!("No TTY available, falling back to batch mode (use --batch to force)");
         run_interactive(emu, 50_000_000);
         return;
     }
 
-    // Disable auto-rendering of video display (we handle output directly)
     emu.bus.console().set_auto_render(false);
 
     let mut stdout = io::stdout();
     stdout.execute(EnterAlternateScreen).expect("Failed to enter alternate screen");
     stdout.flush().ok();
 
-    // Print welcome banner
-    print!("\r\nIMSAI 8080 Terminal\r\nPress Ctrl+] to exit, Ctrl+K for commands\r\n---\r\n");
-    stdout.flush().ok();
-
-    // If no program is loaded (memory is 0xFF at address 0), enter command mode immediately
+    // If no program loaded, enter command mode immediately
     if emu.bus.mem_read(0x0000) == 0xFF && emu.cpu.pc == 0x0000 {
-        print!("\r\nNo program loaded. Enter command mode.\r\n");
-        stdout.flush().ok();
         handle_command_mode(emu, &mut stdout, &mut program_name);
         if emu.bus.mem_read(0x0000) == 0xFF && emu.cpu.pc == 0x0000 {
-            // Still nothing loaded - just exit
-            println!("\r\nNo program loaded. Use --load, --program, or Ctrl+K to load one.\r\n");
+            println!("\r\nNo program loaded. Use --load, --program, or Ctrl+K to load one.");
             stdout.execute(LeaveAlternateScreen).ok();
             disable_raw_mode().ok();
             return;
         }
-        // Program was loaded via command mode, resume
-        print!("\r\n--- Resuming execution ---\r\n");
-        stdout.flush().ok();
     }
 
     let batch_size: u64 = 5000;
@@ -535,44 +532,84 @@ fn run_terminal(emu: &mut rust_imsai_emulator::Imsai8080) {
     let poll_timeout = std::time::Duration::from_millis(0);
     let mut instruction_count: u64 = 0;
     let mut idle_count: u64 = 0;
-
+    let mut last_display: String = String::new();
     let start_time = Instant::now();
 
     loop {
         // Run a batch of CPU instructions
         for _ in 0..batch_size {
-            let pc = emu.cpu.pc;
-            let op = emu.bus.mem_read(pc);
-
             emu.step();
             instruction_count += 1;
-
-            // Intercept OUT 0x00/0x7B (console data) to print directly to terminal
-            if op == 0xD3 {
-                let port = emu.bus.mem_read(pc + 1);
-                if port == 0x00 || port == 0x7B {
-                    let ch = emu.cpu.a;
-                    if ch == 0x0D {
-                        print!("\r");
-                    } else if ch == 0x0A {
-                        print!("\n");
-                    } else if ch == 0x08 {
-                        // Backspace: move left, clear, move left
-                        print!("\x08 \x08");
-                    } else if ch >= 0x20 && ch < 0x7F {
-                        print!("{}", ch as char);
-                    }
-                    // Control chars below 0x20 (except CR/LF/BS) are silently ignored
-                    stdout.flush().ok();
-                }
-            }
+            emu.bus.serial().service_uart();
 
             if emu.cpu.halted {
                 break;
             }
         }
 
-        // After the batch, check for keyboard input (non-blocking)
+        // Render the display after each batch (or when halted)
+        let display = emu.bus.console().video().get_display_string();
+        if display != last_display || emu.cpu.halted {
+            last_display = display.clone();
+            let term_size = crossterm::terminal::size().unwrap_or((24, 80));
+            let term_cols = term_size.1 as usize;
+            let term_rows = term_size.0 as usize;
+            let display_lines: Vec<&str> = display.trim_end_matches('\n').lines().collect();
+
+            // Show the bottom of the display (where action happens)
+            let visible = term_rows.saturating_sub(2); // reserve 2 for status bar
+            let skip = display_lines.len().saturating_sub(visible);
+
+            print!("\x1B[H"); // move to top-left
+            for (_, line) in display_lines.iter().enumerate().skip(skip).take(visible) {
+                let truncated: String = line.chars().take(term_cols).collect();
+                print!("{}\x1B[K\n", truncated);
+            }
+            // Pad remaining lines
+            let used = display_lines.len().saturating_sub(skip).min(visible);
+            for _ in used..visible {
+                print!(" \x1B[K\n");
+            }
+
+            // Status bar (inverted video)
+            let state = if emu.cpu.halted { "HALT" } else if idle_count > 3 { "IDLE" } else { "RUN " };
+            let status = format!(
+                " {} PC:{:04X} SP:{:04X} A:{:02X} B:{:02X} C:{:02X} D:{:02X} E:{:02X} H:{:02X} L:{:02X}  {}  Ctrl+K=cmd  Ctrl+]=exit ",
+                state, emu.cpu.pc, emu.cpu.sp, emu.cpu.a,
+                emu.cpu.b, emu.cpu.c, emu.cpu.d, emu.cpu.e, emu.cpu.h, emu.cpu.l,
+                program_name
+            );
+            print!("\x1B[7m{}\x1B[0m", status);
+            stdout.flush().ok();
+
+            // If halted, show message and wait for command
+            if emu.cpu.halted {
+                print!("\r\n\r\n--- CPU HALTED ---\r\nCtrl+K for commands, Ctrl+] to exit.\r\n");
+                stdout.flush().ok();
+                loop {
+                    if event::poll(std::time::Duration::from_millis(100)).unwrap_or(false) {
+                        if let Ok(ev) = event::read() {
+                            match ev {
+                                Event::Key(KeyEvent { code: KeyCode::Char(']'), modifiers: KeyModifiers::CONTROL, .. }) => {
+                                    stdout.execute(LeaveAlternateScreen).ok();
+                                    disable_raw_mode().ok();
+                                    save_memory(emu);
+                                    return;
+                                }
+                                Event::Key(KeyEvent { code: KeyCode::Char('k'), modifiers: KeyModifiers::CONTROL, .. }) => {
+                                    handle_command_mode(emu, &mut stdout, &mut program_name);
+                                    last_display.clear();
+                                    break;
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Keyboard input
         let mut got_key = false;
         while event::poll(poll_timeout).unwrap_or(false) {
             if let Ok(ev) = event::read() {
@@ -580,7 +617,6 @@ fn run_terminal(emu: &mut rust_imsai_emulator::Imsai8080) {
                     Event::Key(key_event) => {
                         match key_event {
                             KeyEvent { code: KeyCode::Esc, .. } => {
-                                // Escape key: send ESC (0x1B)
                                 emu.bus.console().type_text("\x1B");
                                 got_key = true;
                             }
@@ -591,93 +627,58 @@ fn run_terminal(emu: &mut rust_imsai_emulator::Imsai8080) {
                                 disable_raw_mode().ok();
                                 let elapsed = start_time.elapsed();
                                 print_instructions_summary(instruction_count, elapsed);
+                                save_memory(emu);
                                 return;
                             }
                             KeyEvent { code: KeyCode::Char('k'), modifiers: KeyModifiers::CONTROL, .. } => {
-                                // Ctrl+K: enter local command mode
                                 handle_command_mode(emu, &mut stdout, &mut program_name);
-                                // After command mode, clear the terminal line and resume
-                                print!("\r\n--- Resumed ---\r\n");
-                                stdout.flush().ok();
+                                last_display.clear();
                                 got_key = true;
                             }
                             KeyEvent { code: KeyCode::Char(ch), modifiers: KeyModifiers::CONTROL, .. } => {
-                                // Ctrl+key: send as control character (A=0x01, B=0x02, etc.)
                                 let ctrl_ch = (ch as u8) & 0x1F;
                                 if ctrl_ch != 0 {
-                                    let buf = [ctrl_ch];
-                                    emu.bus.console().type_text(&String::from_utf8_lossy(&buf));
+                                    emu.bus.serial().type_text(&String::from_utf8_lossy(&[ctrl_ch]));
                                     got_key = true;
                                 }
                             }
                             KeyEvent { code: KeyCode::Char(ch), .. } => {
-                                // Regular character: convert to uppercase
-                                let byte = if ch == '\n' || ch == '\r' {
-                                    0x0D_u8 // CR
-                                } else {
-                                    ch.to_ascii_uppercase() as u8
-                                };
-                                let buf = [byte];
-                                emu.bus.console().type_text(&String::from_utf8_lossy(&buf));
+                                let upper: String = ch.to_uppercase().collect();
+                                emu.bus.serial().type_text(&upper);
                                 got_key = true;
                             }
                             KeyEvent { code: KeyCode::Enter, .. } => {
-                                emu.bus.console().type_text("\r");
+                                emu.bus.serial().type_text("\r");
                                 got_key = true;
                             }
                             KeyEvent { code: KeyCode::Backspace, .. } => {
-                                emu.bus.console().type_text("\x7F");
+                                emu.bus.serial().type_text("\x7F");
                                 got_key = true;
                             }
-                            KeyEvent { code: KeyCode::Delete, .. } => {
-                                emu.bus.console().type_text("\x7F");
-                                got_key = true;
-                            }
-                            KeyEvent { code: KeyCode::Tab, .. } => {
-                                emu.bus.console().type_text("\t");
-                                got_key = true;
-                            }
-                            _ => {} // Ignore other key events
+                            KeyEvent { code: KeyCode::F(_) | KeyCode::Null | KeyCode::CapsLock | KeyCode::ScrollLock | KeyCode::NumLock | KeyCode::PrintScreen | KeyCode::Pause | KeyCode::KeypadBegin | KeyCode::Media(_) | KeyCode::Modifier(_), .. } => {}
+                            _ => {}
                         }
                     }
                     Event::Resize(_, _) => {
-                        // Terminal resize
+                        last_display.clear(); // force re-render
                     }
-                    _ => {} // Ignore mouse and other events
+                    Event::Mouse(_) | Event::FocusGained | Event::FocusLost | Event::Paste(_) => {}
                 }
             }
         }
 
-        if emu.cpu.halted {
-            print!("\r\n\r\n--- CPU HALTED ---\r\n");
-            break;
+        if got_key {
+            idle_count = 0;
+        } else {
+            idle_count += 1;
         }
 
-        // If no key was pressed and the keyboard buffer is empty,
-        // we're likely in the CONIN spin loop. Sleep briefly to
-        // avoid burning 100% CPU.
-        if !got_key && !emu.bus.console().is_key_ready() {
-            idle_count += 1;
-            if idle_count > 5 {
-                // After 5 idle batches, start sleeping to reduce CPU usage.
-                // This means we'll still check for input every 5ms, which
-                // gives ~200Hz polling rate - more than enough for typing.
-                std::thread::sleep(idle_sleep);
-            }
-        } else {
-            idle_count = 0;
+        if idle_count > 3 {
+            std::thread::sleep(idle_sleep);
+            emu.bus.serial().service_uart();
         }
     }
-
-    // Cleanup terminal
-    print!("\r\n");
-    stdout.execute(LeaveAlternateScreen).ok();
-    disable_raw_mode().ok();
-
-    let elapsed = start_time.elapsed();
-    print_instructions_summary(instruction_count, elapsed);
 }
-
 fn print_instructions_summary(count: u64, elapsed: std::time::Duration) {
     let secs = elapsed.as_secs_f64();
     let ips = if secs > 0.0 { count as f64 / secs } else { 0.0 };
