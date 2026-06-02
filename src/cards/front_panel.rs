@@ -177,12 +177,14 @@ impl FrontPanel {
     }
 
     /// Set the 8 data toggle switches.
-    /// Data LEDs update immediately (hardwired in real hardware).
+    ///
+    /// This records the switch positions only. It deliberately does NOT drive
+    /// the data LEDs: on a real IMSAI the data lamps show the data *bus* (the
+    /// byte latched by the last EXAMINE/DEPOSIT, or live CPU activity in RUN),
+    /// not the switch positions. Mirroring the switches here would clobber the
+    /// value an EXAMINE just latched on the very next refresh.
     pub fn set_data_switches(&mut self, data: u8) {
         self.data_switches = data;
-        if self.run_state == RunState::Stopped {
-            self.leds.data = u8_to_bool_array(data);
-        }
     }
 
     /// Get the current address switch value.
@@ -399,6 +401,10 @@ impl FrontPanel {
                     self.leds.wait = true;
                 }
                 PanelSwitch::Examine => {
+                    // EXAMINE loads the address switches into the program
+                    // counter (as on a real IMSAI), so RUN / SINGLE STEP then
+                    // start executing from the examined address.
+                    cpu.pc = self.address_switches;
                     self.examine(bus);
                 }
                 PanelSwitch::Deposit => {
@@ -406,6 +412,7 @@ impl FrontPanel {
                 }
                 PanelSwitch::ExamineNext => {
                     self.address_switches = self.address_switches.wrapping_add(1);
+                    cpu.pc = self.address_switches;
                     self.leds.address = u16_to_bool_array(self.address_switches);
                     self.examine(bus);
                 }
@@ -557,8 +564,9 @@ mod tests {
         let mut panel = FrontPanel::new();
         panel.set_data_switches(0xAB);
         assert_eq!(panel.data_switches(), 0xAB);
-        // LEDs should update when stopped
-        assert_eq!(bool_array_to_u8(panel.leds().data), 0xAB);
+        // The data switches must NOT drive the data LEDs -- those show the
+        // data bus (EXAMINE/DEPOSIT result), so they stay clear here.
+        assert_eq!(bool_array_to_u8(panel.leds().data), 0x00);
     }
 
     #[test]
@@ -697,14 +705,101 @@ mod tests {
     }
 
     #[test]
-    fn test_leds_mirror_switches_in_stop_mode() {
+    fn test_address_leds_mirror_switches_in_stop_mode() {
         let mut panel = FrontPanel::new();
         panel.set_address_switches(0xBEEF);
         panel.set_data_switches(0xDE);
 
-        // LEDs should mirror the switches when stopped
+        // The address LEDs mirror the address switches in STOP mode (the panel
+        // drives the address bus), but the data LEDs show the data bus, not the
+        // data switches -- so they remain clear until an EXAMINE/DEPOSIT.
         assert_eq!(bool_array_to_u16(panel.leds().address), 0xBEEF);
-        assert_eq!(bool_array_to_u8(panel.leds().data), 0xDE);
+        assert_eq!(bool_array_to_u8(panel.leds().data), 0x00);
+    }
+
+    #[test]
+    fn test_deposit_writes_latched_address_while_data_changes() {
+        // Mimics the GUI: EXAMINE latches the address; afterwards only the data
+        // switches are pushed each frame (the low 8 sense switches double as
+        // data). Dialing a data byte must NOT move the deposit target.
+        let mut panel = FrontPanel::new();
+        let mut bus = crate::bus::ImsaiBus::new();
+        let mut cpu = intel8080::Cpu8080::new();
+
+        // Latch address 0x0100 via EXAMINE.
+        panel.set_address_switches(0x0100);
+        panel.press_switch(PanelSwitch::Examine);
+        panel.process_actions(&mut bus, &mut cpu);
+
+        // Several "frames" pushing the data switches (0x3E) -- address holds.
+        for _ in 0..3 {
+            panel.set_data_switches(0x3E);
+            panel.process_actions(&mut bus, &mut cpu);
+        }
+        assert_eq!(panel.address_switches(), 0x0100, "address must stay latched");
+
+        // DEPOSIT writes the data byte at the latched address (not 0x013E).
+        panel.press_switch(PanelSwitch::Deposit);
+        panel.process_actions(&mut bus, &mut cpu);
+        assert_eq!(bus.mem_read(0x0100), 0x3E);
+
+        // DEPOSIT NEXT advances the latched address and writes again.
+        panel.set_data_switches(0xC9);
+        panel.press_switch(PanelSwitch::DepositNext);
+        panel.process_actions(&mut bus, &mut cpu);
+        assert_eq!(bus.mem_read(0x0101), 0xC9);
+        assert_eq!(panel.address_switches(), 0x0101);
+    }
+
+    #[test]
+    fn test_examine_sets_pc_then_single_step_advances() {
+        let mut panel = FrontPanel::new();
+        let mut bus = crate::bus::ImsaiBus::new();
+        let mut cpu = intel8080::Cpu8080::new();
+
+        // Two NOPs at 0x0100.
+        bus.mem_write(0x0100, 0x00);
+        bus.mem_write(0x0101, 0x00);
+
+        // EXAMINE the start address: this loads the PC.
+        panel.set_address_switches(0x0100);
+        panel.press_switch(PanelSwitch::Examine);
+        panel.process_actions(&mut bus, &mut cpu);
+        assert_eq!(cpu.pc, 0x0100, "EXAMINE should load PC from the address switches");
+
+        // SINGLE STEP executes the NOP and advances; the panel address (and
+        // address LEDs) must follow the new PC.
+        panel.do_single_step(&mut bus, &mut cpu);
+        assert_eq!(cpu.pc, 0x0101);
+        assert_eq!(panel.address_switches(), 0x0101, "address should follow the new PC");
+        assert_eq!(bool_array_to_u16(panel.leds().address), 0x0101);
+    }
+
+    #[test]
+    fn test_examined_value_survives_repeated_switch_refresh() {
+        // Regression: the GUI re-pushes the switch state every frame via
+        // set_address_switches/set_data_switches. An EXAMINE result must
+        // remain on the data LEDs across those refreshes, not get clobbered.
+        let mut panel = FrontPanel::new();
+        let mut bus = crate::bus::ImsaiBus::new();
+        let mut cpu = intel8080::Cpu8080::new();
+
+        bus.mem_write(0x0040, 0x3E);
+
+        // "Frame" 1: dial in the address, press EXAMINE.
+        panel.set_address_switches(0x0040);
+        panel.set_data_switches(0x40); // low byte doubles as data switches
+        panel.press_switch(PanelSwitch::Examine);
+        panel.process_actions(&mut bus, &mut cpu);
+        assert_eq!(bool_array_to_u8(panel.leds().data), 0x3E);
+
+        // Subsequent "frames" with no button press must NOT overwrite it.
+        for _ in 0..5 {
+            panel.set_address_switches(0x0040);
+            panel.set_data_switches(0x40);
+            panel.process_actions(&mut bus, &mut cpu);
+            assert_eq!(bool_array_to_u8(panel.leds().data), 0x3E);
+        }
     }
 
     #[test]
