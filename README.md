@@ -25,12 +25,17 @@ The `imsai-panel` binary provides a visual raylib front panel:
 cargo run --bin imsai-panel
 ```
 
-Defaults to running the UART test program (prints "A" continuously on the console display).
+Defaults to running the UART test program (prints "A" continuously on
+the console display). The program is preloaded into memory starting at
+address `0x0000` before the panel comes up, so address 0 holds `0x3E`
+(the `MVI A,...` opcode) rather than the floating-bus `0xFF` you'd see
+on a freshly powered-on IMSAI with no software. Use `--bare` to start
+with empty memory.
 
 | Flag                     | Description                                      |
 | ------------------------ | ------------------------------------------------ |
-| (none)                   | Start with UART test program running (demo mode) |
-| `--bare`                 | Start with empty memory, front panel only        |
+| (none)                   | Start with UART test program loaded, STOPPED    |
+| `--bare`                 | Start with empty memory (all addresses = 0xFF)  |
 | `--load <file> [0xADDR]` | Load raw binary file at address                  |
 | `--disk <file>`          | Load disk image and boot CP/M 2.2                |
 | `--program <file>`       | Load and execute a front panel program (JSON)    |
