@@ -117,7 +117,7 @@ fn load_program_file(path: &PathBuf) -> Result<PanelProgram, String> {
 fn print_usage(args: &Vec<String>) {
     eprintln!("IMSAI 8080 Emulator - Terminal Mode");
     eprintln!();
-    eprintln!("Usage: {} [OPTIONS]", args.get(0).unwrap_or(&"rust-imsai-emulator".to_string()));
+    eprintln!("Usage: {} [OPTIONS]", args.get(0).unwrap_or(&"imsai-cli".to_string()));
     eprintln!();
     eprintln!("Mode (choose one):");
     eprintln!("  <disk_image.img>         Boot CP/M 2.2 from disk image");

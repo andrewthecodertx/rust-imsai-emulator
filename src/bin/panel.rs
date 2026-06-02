@@ -4,10 +4,10 @@
 //! and function buttons. No ROM, no CP/M, just hardware.
 //!
 //! Usage:
-//!   imsai-panel              Start with empty memory, front panel only
-//!   imsai-panel --program    Load a front panel program (.json)
-//!   imsai-panel --load <file> [addr]  Load binary at address (default 0x0000)
-//!   imsai-panel --disk <file>         Load disk image and boot CP/M
+//!   imsai-gui                 Start with empty memory, front panel only
+//!   imsai-gui --program      Load a front panel program (.json)
+//!   imsai-gui --load <file> [addr]  Load binary at address (default 0x0000)
+//!   imsai-gui --disk <file>         Load disk image and boot CP/M
 
 use raylib::prelude::RaylibDraw;
 use std::env;
@@ -248,7 +248,7 @@ fn main() {
     if args.contains(&"--help".to_string()) || args.contains(&"-h".to_string()) {
         eprintln!("IMSAI 8080 Front Panel");
         eprintln!();
-        eprintln!("Usage: imsai-panel [OPTIONS]");
+        eprintln!("Usage: imsai-gui [OPTIONS]");
         eprintln!();
         eprintln!("Options:");
         eprintln!("  (default)           Start with empty memory, STOPPED");

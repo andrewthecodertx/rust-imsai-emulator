@@ -8,12 +8,12 @@ name = "rust_imsai_emulator"
 path = "src/lib.rs"
 
 [[bin]]
-name = "rust-imsai-emulator"
+name = "imsai-cli"
 path = "src/main.rs"
 
 # Front panel GUI (raylib) - optional, requires raylib C library
 [[bin]]
-name = "imsai-panel"
+name = "imsai-gui"
 path = "src/bin/panel.rs"
 
 [dependencies]

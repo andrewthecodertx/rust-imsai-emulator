@@ -21,10 +21,10 @@ Emulates the IMSAI 8080 hardware (CPU, memory, Tarbell disk controller, console 
 
 ## Front Panel GUI
 
-The `imsai-panel` binary provides a visual raylib front panel:
+The `imsai-gui` binary provides a visual raylib front panel:
 
 ```bash
-cargo run --bin imsai-panel
+cargo run --bin imsai-gui
 ```
 
 Defaults to empty memory (all addresses = 0xFF), matching a powered-on
@@ -76,10 +76,10 @@ The `load` action is a shortcut that writes bytes via `load_program()` instead o
 
 ```bash
 # Run the UART test program
-cargo run --bin imsai-panel -- --program programs/uart_test.json
+cargo run --bin imsai-gui -- --program programs/uart_test.json
 
 # Run the Hello World program
-cargo run --bin imsai-panel -- --program programs/hello-world.json
+cargo run --bin imsai-gui -- --program programs/hello-world.json
 ```
 
 ### Front Panel Controls
@@ -105,7 +105,7 @@ cargo run --release -- <disk_image.img>
 Requires a CP/M 2.2 disk image (256,256 bytes, 77 tracks x 26 sectors x 128 bytes). The system tracks must contain CCP+BDOS assembled for addresses 0xE400/0xEC06 with the Tarbell controller ports.
 
 ```
-rust-imsai-emulator <disk_image.img> [OPTIONS]
+imsai-cli <disk_image.img> [OPTIONS]
 
 Options:
   (default)         Interactive terminal mode with keyboard input
