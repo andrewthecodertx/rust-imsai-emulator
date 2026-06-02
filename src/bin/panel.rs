@@ -418,6 +418,7 @@ fn main() {
                         2 => {
                             // RESET (up) / EXT.CLR (down): restart CPU at 0
                             emu.cpu.pc = 0;
+                            emu.cpu.halted = false;
                         }
                         3 => emu.panel.press_switch(PanelSwitch::RunStop), // RUN (up) / STOP (down)
                         4 => step_pending = true,                          // SINGLE STEP
@@ -640,12 +641,17 @@ fn main() {
         }
 
         // ---- Run ----
+        // The CPU executes only while the panel is in RUN *and* the CPU has
+        // not halted (HLT). run_batch stops on HLT, so once halted it returns
+        // 0 and the cycle counter freezes; the front panel LEDs already show
+        // the halt state (RUN off, WAIT + HLTA on).
+        running = emu.panel.is_running() && !emu.cpu.halted;
+        if running {
+            cycles += emu.run_batch(10000);
+        }
+        // Always service the UART so any bytes still in the transmitter shift
+        // out -- including the final ones emitted just before a HLT.
         if emu.panel.is_running() {
-            running = true;
-            let n: u64 = 10000;
-            emu.run_batch(n);
-            cycles += n;
-
             emu.bus.serial().channel_a_mut().drain_tx();
             emu.bus.serial().channel_a_mut().update_tx();
             emu.bus.serial().poll_keyboard();
@@ -664,8 +670,6 @@ fn main() {
                     _ => {}
                 }
             }
-        } else {
-            running = false;
         }
 
         // ---- Draw ----
@@ -741,7 +745,7 @@ fn main() {
         // ---------------------------------------------------------------
         let status = [
             ("MEMR", leds.memr), ("INP", leds.ior), ("M1", leds.m1), ("OUT", leds.iow),
-            ("HLTA", false), ("STACK", false), ("WO", leds.mwrt), ("INTA", leds.int),
+            ("HLTA", leds.hlta), ("STACK", false), ("WO", leds.mwrt), ("INTA", leds.int),
         ];
         for (j, (lbl, on)) in status.iter().enumerate() {
             let cx = byte_col_x(LBYTE_X0, j);
@@ -834,7 +838,7 @@ fn main() {
         // === Bottom bar: machine state + keyboard shortcuts ===
         d.draw_rectangle(0, H - 22, W, 22, rgb(28, 28, 30));
         let cpu = &emu.cpu;
-        let state = if running_now { "RUN " } else { "STOP" };
+        let state = if cpu.halted { "HALT" } else if running_now { "RUN " } else { "STOP" };
         let line = format!(
             "{}  PC:{:04X} SP:{:04X} A:{:02X} BC:{:02X}{:02X} DE:{:02X}{:02X} HL:{:02X}{:02X}   {}   cyc:{}",
             state, cpu.pc, cpu.sp, cpu.a, cpu.b, cpu.c, cpu.d, cpu.e, cpu.h, cpu.l,

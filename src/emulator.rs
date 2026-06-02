@@ -63,8 +63,10 @@ impl Imsai8080 {
         let op_byte = self.bus.mem_read(pc_before);
         let cycles = self.cpu.step(&mut self.bus);
 
-        // Update the front panel with what happened
-        self.panel.update_run_leds(&self.cpu);
+        // Update the front panel with what happened. The data bus shows the
+        // byte at the (new) PC -- the opcode the next M1 cycle will fetch.
+        let data_bus = self.bus.mem_read(self.cpu.pc);
+        self.panel.update_run_leds(&self.cpu, data_bus);
 
         // Check if this was an I/O instruction and log it
         if op_byte == 0xD3 {

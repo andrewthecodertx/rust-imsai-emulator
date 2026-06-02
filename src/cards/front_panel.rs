@@ -54,6 +54,8 @@ pub struct PanelLeds {
     pub run: bool,
     /// Machine cycle 1: instruction fetch (M1 LED)
     pub m1: bool,
+    /// Halt acknowledge: CPU executed HLT (HLTA status LED)
+    pub hlta: bool,
     /// CPU in wait state (WAIT LED)
     pub wait: bool,
     /// Interrupt acknowledge (INT LED)
@@ -306,12 +308,32 @@ impl FrontPanel {
     }
 
     /// Update LEDs to reflect current bus state during RUN mode.
-    /// Call this after each CPU step to show live bus activity.
-    pub fn update_run_leds(&mut self, cpu: &intel8080::Cpu8080) {
+    ///
+    /// Call this after each CPU step to show live bus activity. `data_bus` is
+    /// the byte currently on the data bus (the opcode about to be fetched at
+    /// the new PC), which the address/data LEDs latch.
+    ///
+    /// If the CPU has executed HLT it is now halted: the RUN light goes out,
+    /// and the WAIT and HLTA (halt acknowledge) lights come on, exactly as on
+    /// a real IMSAI where HLT parks the processor in a wait state.
+    pub fn update_run_leds(&mut self, cpu: &intel8080::Cpu8080, data_bus: u8) {
         if self.run_state == RunState::Running {
             self.leds.address = u16_to_bool_array(cpu.pc);
-            self.leds.run = true;
-            self.leds.wait = false;
+            self.leds.data = u8_to_bool_array(data_bus);
+            if cpu.halted {
+                self.leds.run = false;
+                self.leds.wait = true;
+                self.leds.hlta = true;
+                self.leds.m1 = false;
+                self.leds.memr = false;
+            } else {
+                self.leds.run = true;
+                self.leds.wait = false;
+                self.leds.hlta = false;
+                // Every instruction begins with an M1 (opcode fetch) memory read.
+                self.leds.m1 = true;
+                self.leds.memr = true;
+            }
         }
     }
 
@@ -358,7 +380,11 @@ impl FrontPanel {
                         // examine/deposit operations. We load the
                         // address switches into PC as the start address.
                         cpu.pc = self.address_switches;
+                        // Releasing the CPU also brings it out of any prior
+                        // HLT state so it actually fetches and runs again.
+                        cpu.halted = false;
                         self.leds.wait = false;
+                        self.leds.hlta = false;
                     } else {
                         self.run_state = RunState::Stopped;
                         should_run = false;
@@ -413,6 +439,7 @@ impl FrontPanel {
         self.leds.address = u16_to_bool_array(cpu.pc);
         self.leds.data = u8_to_bool_array(bus.mem_read(cpu.pc));
         self.leds.m1 = true; // Just completed an instruction fetch
+        self.leds.hlta = cpu.halted; // HLT reached?
         self.leds.run = false; // Stopped after single step
         self.leds.wait = true; // Back in wait state
         self.address_switches = cpu.pc; // Update switches to show new address
