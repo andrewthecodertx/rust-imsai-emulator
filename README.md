@@ -2,6 +2,8 @@
 
 A Rust emulator for the IMSAI 8080 that boots CP/M 2.2 with a custom BIOS and Tarbell floppy controller. Includes a raylib front panel GUI with toggle switches, LEDs, and a console display.
 
+![IMSAI 8080 front panel](docs/imsai-screenshot.png)
+
 ## What It Does
 
 Emulates the IMSAI 8080 hardware (CPU, memory, Tarbell disk controller, console I/O) and runs a CP/M 2.2 operating system from a disk image. The custom BIOS provides the 17 standard CP/M entry points, and the Tarbell FD1771 controller handles disk reads and writes.
