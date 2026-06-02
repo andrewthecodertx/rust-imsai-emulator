@@ -24,10 +24,13 @@ Read to receive a character. Write to send a character.
 
 Read for status bits:
 
-| Bit | Meaning |
-|-----|---------|
-| 0 | RX Ready: a character is available to read |
-| 1 | TX Ready: the UART is ready to accept a character |
+| Bit | Value | Meaning |
+|-----|-------|---------|
+| 0 | 0x01 | TxRDY: transmitter is ready to accept a character |
+| 1 | 0x02 | RxRDY: a character is available to read |
+
+Important: TxRDY is bit 0 (0x01), not bit 1. Using `ANI 0x02` when you
+mean `ANI 0x01` will check the wrong bit and hang until a key is pressed.
 
 Write commands to configure and control the UART:
 
@@ -56,18 +59,23 @@ status on port 0x01 before each action.
 ```
 ; Character to send is in register C
 SEND: IN  0x01        ; DB 01 - read UART status
-      ANI 0x02        ; E6 02 - check TX Ready bit
+      ANI 0x01        ; E6 01 - check TX Ready bit (bit 0)
       JZ  SEND        ; CA xx xx - loop until ready
       MOV A, C        ; 79 - move character to A
       OUT 0x00        ; D3 00 - send it
       RET             ; C9
 ```
 
+Note: TxRDY is **bit 0** (0x01) of the status register, not bit 1. The
+BIOS uses `ANI 0x01` for TX Ready and `ANI 0x01` for RX Ready as well
+(CONST checks if either is set). A common mistake is to use `ANI 0x02`,
+which checks RxRDY instead and will hang until a key is pressed.
+
 ### Receiving a Character (Polling RX Ready)
 
 ```
 RECV: IN  0x01        ; DB 01 - read UART status
-      ANI 0x01        ; E6 01 - check RX Ready bit
+      ANI 0x02        ; E6 02 - check RX Ready bit (bit 1)
       JZ  RECV        ; CA xx xx - loop until character available
       IN  0x00        ; DB 00 - read character
       ANI 0x7F        ; E6 7F - mask to 7 bits (ASCII)
@@ -253,7 +261,7 @@ newline, then halts the CPU. It polls TX Ready before each character:
   "name": "Hello, World!",
   "description": "Initializes the UART and prints 'HELLO, WORLD!' with a newline, then halts. Demonstrates null-terminated strings, TX-ready polling, and HLT.",
   "steps": [
-    { "action": "load", "address": "0000", "data": "3E 4E D3 01 3E 05 D3 01 21 35 00 DB 01 E6 02 CA 0B 00 7E FE 00 CA 1E 00 D3 00 23 C3 0B 00 DB 01 E6 02 CA 1E 00 3E 0D D3 00 DB 01 E6 02 CA 29 00 3E 0A D3 00 76 48 45 4C 4C 4F 2C 20 57 4F 52 4C 44 21 00" },
+    { "action": "load", "address": "0000", "data": "3E 4E D3 01 3E 05 D3 01 21 35 00 DB 01 E6 01 CA 0B 00 7E FE 00 CA 1E 00 D3 00 23 C3 0B 00 DB 01 E6 01 CA 1E 00 3E 0D D3 00 DB 01 E6 01 CA 29 00 3E 0A D3 00 76 48 45 4C 4C 4F 2C 20 57 4F 52 4C 44 21 00" },
     { "action": "run", "address": "0000" }
   ]
 }
@@ -268,7 +276,7 @@ Assembly listing:
 0006  D3 01      OUT 0x01       ; write command
 0008  21 35 00   LXI H, MSG    ; HL = string pointer
 000B  DB 01      IN 0x01        ; read UART status
-000D  E6 02      ANI 0x02       ; mask TX Ready bit
+000D  E6 01      ANI 0x01       ; mask TxRDY bit (bit 0)
 000F  CA 0B 00   JZ 0x000B      ; loop until transmitter ready
 0012  7E         MOV A,M        ; load next character
 0013  FE 00      CPI 0x00       ; null terminator?
@@ -276,13 +284,13 @@ Assembly listing:
 0018  D3 00      OUT 0x00       ; send character
 001A  23         INX H           ; advance string pointer
 001B  C3 0B 00   JMP 0x000B      ; next character
-001E  DB 01 DONE: IN 0x01       ; wait for TX Ready (CR)
-0020  E6 02      ANI 0x02
+001E  DB 01 DONE: IN 0x01       ; wait for TxRDY (CR)
+0020  E6 01      ANI 0x01
 0022  CA 1E 00   JZ 0x001E
 0025  3E 0D      MVI A, 0x0D    ; CR
 0027  D3 00      OUT 0x00
-0029  DB 01      IN 0x01        ; wait for TX Ready (LF)
-002B  E6 02      ANI 0x02
+0029  DB 01      IN 0x01        ; wait for TxRDY (LF)
+002B  E6 01      ANI 0x01
 002D  CA 29 00   JZ 0x0029
 0030  3E 0A      MVI A, 0x0A    ; LF
 0032  D3 00      OUT 0x00
@@ -296,7 +304,8 @@ behavior; the program has finished its work.
 
 ## Complete Example: Echo
 
-This program reads characters from the console and echoes them back:
+This program reads characters from the console and echoes them back.
+It waits for RxRDY (bit 1) to receive, then waits for TxRDY (bit 0) to send:
 
 ```
 0000  3E 4E      MVI A, 0x4E    ; UART mode
@@ -304,13 +313,18 @@ This program reads characters from the console and echoes them back:
 0004  3E 05      MVI A, 0x05    ; UART command: TX+RX enable
 0006  D3 01      OUT 0x01
 
-0008  DB 01      WAIT: IN 0x01  ; read status
-000A  E6 01      ANI 0x01       ; RX ready?
-000C  CA 08 00   JZ WAIT        ; loop until character received
+0008  DB 01      RECV: IN 0x01  ; read status
+000A  E6 02      ANI 0x02       ; RxRDY? (bit 1)
+000C  CA 08 00   JZ RECV        ; loop until character received
 000F  DB 00      IN 0x00        ; read character
 0011  E6 7F      ANI 0x7F       ; mask to 7 bits
-0013  D3 00      OUT 0x00       ; echo it back
-0015  C3 08 00   JMP WAIT       ; loop forever
+0013  47         MOV B, A        ; save character in B
+0014  DB 01      SEND: IN 0x01  ; read status
+0016  E6 01      ANI 0x01       ; TxRDY? (bit 0)
+0018  CA 14 00   JZ SEND        ; loop until transmitter ready
+001B  78         MOV A, B        ; restore character
+001C  D3 00      OUT 0x00       ; echo it back
+001E  C3 08 00   JMP RECV       ; loop forever
 ```
 
 JSON version:
@@ -318,12 +332,12 @@ JSON version:
 ```json
 {
   "name": "Echo",
-  "description": "Reads characters from console and echoes them back",
+  "description": "Reads characters from console and echoes them back. Waits for both RxRDY and TxRDY before each operation.",
   "steps": [
     {
       "action": "load",
       "address": "0000",
-      "data": "3E 4E D3 01 3E 05 D3 01 DB 01 E6 01 CA 08 00 DB 00 E6 7F D3 00 C3 08 00"
+      "data": "3E 4E D3 01 3E 05 D3 01 DB 01 E6 02 CA 08 00 DB 00 E6 7F 47 DB 01 E6 01 CA 14 00 78 D3 00 C3 08 00"
     },
     { "action": "run", "address": "0000" }
   ]
