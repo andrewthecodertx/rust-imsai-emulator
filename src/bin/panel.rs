@@ -51,8 +51,22 @@ struct PanelProgram {
 }
 
 fn default_programs_dir() -> PathBuf {
-    let exe_dir = env::current_exe().unwrap_or_else(|_| PathBuf::from("."));
-    exe_dir.parent().unwrap_or(std::path::Path::new(".")).join("PROGRAMS")
+    // Look for PROGRAMS/ relative to current working directory first,
+    // then relative to the executable directory
+    let cwd = PathBuf::from(".");
+    let cwd_prog = cwd.join("PROGRAMS");
+    if cwd_prog.exists() {
+        return cwd_prog;
+    }
+    if let Ok(exe) = env::current_exe() {
+        if let Some(parent) = exe.parent() {
+            let exe_prog = parent.join("PROGRAMS");
+            if exe_prog.exists() {
+                return exe_prog;
+            }
+        }
+    }
+    PathBuf::from("PROGRAMS")
 }
 
 fn load_program_file(path: &PathBuf) -> Result<PanelProgram, String> {
@@ -156,11 +170,11 @@ fn main() {
         eprintln!("Usage: imsai-panel [OPTIONS]");
         eprintln!();
         eprintln!("Options:");
-        eprintln!("  (default)           Start with UART test program running");
+        eprintln!("  (default)           Start with UART test program loaded, STOPPED");
         eprintln!("  --bare              Start with empty memory (front panel only)");
         eprintln!("  --load <file> [addr] Load raw binary at address (default 0x0000)");
         eprintln!("  --disk <file>       Load disk image and boot CP/M 2.2");
-        eprintln!("  --program <file>    Load and execute a front panel program (.json)");
+        eprintln!("  --program <file>    Load a front panel program (.json), STOPPED");
         eprintln!("  --help, -h          Show this help");
         return;
     }
@@ -175,16 +189,24 @@ fn main() {
     let mut emu = Imsai8080::new();
     let mut addr_sw = [false; 16];
     let mut data_sw = [false; 8];
+    let mut program_name = String::new(); // shown in UI
 
-    // Load program/disk based on arguments
-    let auto_run = if !bare {
+    // Load program/disk based on arguments. All modes start STOPPED.
+    // The user presses F5 or clicks RUN/STOP to begin execution.
+    let _loaded_program = if !bare {
         if let Some(ref path) = program_arg {
-            // Load and execute a front panel program
             let pbuf = PathBuf::from(path);
             match load_program_file(&pbuf) {
                 Ok(prog) => {
                     eprintln!("Loaded program: {}", prog.name);
                     execute_panel_program(&mut emu, &prog);
+                    // Set address switches to start address of program
+                    if let Some(start_addr) = find_program_start(&prog) {
+                        for i in 0..16 {
+                            addr_sw[i] = (start_addr >> (15 - i)) & 1 != 0;
+                        }
+                    }
+                    program_name = prog.name.clone();
                     true
                 }
                 Err(e) => {
@@ -196,8 +218,8 @@ fn main() {
             match emu.bus.card_mut::<TarbellCard>().unwrap().insert_disk(0, path) {
                 Ok(()) => {
                     boot_cpm(&mut emu);
-                    emu.panel.press_switch(PanelSwitch::RunStop);
-                    emu.process_panel();
+                    // Start STOPPED at CCP entry point, user presses F5 to run
+                    program_name = "CP/M 2.2".to_string();
                 }
                 Err(e) => eprintln!("Error loading disk '{}': {}", path, e),
             }
@@ -211,30 +233,26 @@ fn main() {
                 Ok(data) => {
                     emu.load_program(addr, &data);
                     emu.panel.set_address_switches(addr);
-                    emu.panel.press_switch(PanelSwitch::RunStop);
                     emu.process_panel();
+                    for i in 0..16 {
+                        addr_sw[i] = (addr >> (15 - i)) & 1 != 0;
+                    }
+                    program_name = format!("{} @ {:04X}", path, addr);
                 }
                 Err(e) => eprintln!("Error loading '{}': {}", path, e),
             }
             true
         } else {
-            // Default: load UART test program
+            // Default: load UART test program, start STOPPED
             emu.load_program(0x0000, &UART_TEST);
             emu.panel.set_address_switches(0x0000);
-            emu.panel.press_switch(PanelSwitch::RunStop);
             emu.process_panel();
+            program_name = "UART Test".to_string();
             true
         }
     } else {
         false
     };
-
-    if auto_run {
-        let start: u16 = 0x0000;
-        for i in 0..16 {
-            addr_sw[i] = (start >> (15 - i)) & 1 != 0;
-        }
-    }
 
     let mut term = [[0x20u8; TERM_COLS]; TERM_ROWS];
     let mut tcx: usize = 0;
@@ -243,6 +261,9 @@ fn main() {
     let mut running = false;
     let mut cycles: u64 = 0;
     let mut step_pending = false;
+    let mut load_program_index: usize = 0;
+    let mut status_msg = String::new();
+    let mut status_msg_timer: i32 = 0; // frames remaining
 
     // Colors
     let bg        = raylib::color::Color { r: 25, g: 25, b: 30, a: 255 };
@@ -328,11 +349,82 @@ fn main() {
         if rl.is_key_pressed(KeyboardKey::KEY_F5) {
             emu.panel.press_switch(PanelSwitch::RunStop);
         }
+        // F2: Load program from PROGRAMS/ directory (cycles through available files)
+        // F3: Save current memory region as a program file
+        if rl.is_key_pressed(KeyboardKey::KEY_F2) {
+            // Scan PROGRAMS/ for .json files
+            let prog_dir = default_programs_dir();
+            if let Ok(entries) = fs::read_dir(&prog_dir) {
+                let mut json_files: Vec<String> = entries
+                    .filter_map(|e| e.ok())
+                    .filter(|e| e.path().extension().map_or(false, |ext| ext == "json"))
+                    .filter_map(|e| e.path().to_str().map(|s| s.to_string()))
+                    .collect();
+                json_files.sort();
+                // Cycle to next program
+                if !json_files.is_empty() {
+                    load_program_index = (load_program_index + 1) % json_files.len();
+                    let path = PathBuf::from(&json_files[load_program_index]);
+                    match load_program_file(&path) {
+                        Ok(prog) => {
+                            eprintln!("Loaded: {}", prog.name);
+                            // Reset emulator, load program, start STOPPED
+                            emu = Imsai8080::new();
+                            execute_panel_program(&mut emu, &prog);
+                            if let Some(start_addr) = find_program_start(&prog) {
+                                for i in 0..16 {
+                                    addr_sw[i] = (start_addr >> (15 - i)) & 1 != 0;
+                                }
+                            }
+                            program_name = prog.name.clone();
+                            cycles = 0;
+                            term = [[0x20u8; TERM_COLS]; TERM_ROWS];
+                            tcx = 0;
+                            tcy = 0;
+                            running = false;
+                            status_msg = format!("Loaded: {}", program_name);
+                            status_msg_timer = 180; // ~6 seconds at 30fps
+                        }
+                        Err(e) => {
+                            status_msg = format!("Error: {}", e);
+                            status_msg_timer = 180;
+                        }
+                    }
+                } else {
+                    status_msg = "No .json programs in PROGRAMS/".to_string();
+                    status_msg_timer = 180;
+                }
+            }
+        }
+        if rl.is_key_pressed(KeyboardKey::KEY_F3) {
+            // Save current memory as a program
+            // Dumps 256 bytes from the current address switches position
+            let pc = emu.cpu.pc;
+            let dump_len: u16 = 256;
+            let prog = memory_to_program(
+                &format!("dump_{:04X}", pc),
+                &format!("Memory dump from {:04X}, {} bytes", pc, dump_len),
+                pc, dump_len, &emu,
+            );
+            if fs::create_dir_all(default_programs_dir()).is_ok() {
+                let filename = default_programs_dir().join(format!("dump_{:04X}.json", pc));
+                match save_program_file(&prog, &filename) {
+                    Ok(()) => {
+                        status_msg = format!("Saved: {}", filename.display());
+                        status_msg_timer = 180;
+                    }
+                    Err(e) => {
+                        status_msg = format!("Save error: {}", e);
+                        status_msg_timer = 180;
+                    }
+                }
+            }
+        }
+        // R: Reset to UART test, STOPPED
         if rl.is_key_pressed(KeyboardKey::KEY_R) {
             emu = Imsai8080::new();
             emu.load_program(0x0000, &UART_TEST);
             emu.panel.set_address_switches(0x0000);
-            emu.panel.press_switch(PanelSwitch::RunStop);
             emu.process_panel();
             addr_sw = [false; 16];
             data_sw = [false; 8];
@@ -340,7 +432,8 @@ fn main() {
             term = [[0x20u8; TERM_COLS]; TERM_ROWS];
             tcx = 0;
             tcy = 0;
-            running = true;
+            running = false;
+            program_name = "UART Test".to_string();
         }
 
         // Keyboard input for terminal (only when running)
@@ -413,6 +506,16 @@ fn main() {
         let state_col = if emu.panel.is_running() { led_on } else { led_red };
         d.draw_text(state_str, lp_x + 200, 14, 18, state_col);
         d.draw_text(&format!("Cycles: {}", cycles), lp_x + 340, 16, 12, txt_dim);
+        if !program_name.is_empty() {
+            d.draw_text(&program_name, lp_x + 10, 38, 11, txt_dim);
+        }
+        // Status message (load/save feedback, fades out)
+        if status_msg_timer > 0 {
+            let alpha = if status_msg_timer < 30 { status_msg_timer * 8 } else { 255 }.min(255) as u8;
+            let msg_col = raylib::color::Color { r: 255, g: 255, b: 200, a: alpha };
+            d.draw_text(&status_msg, tp_x + 5, 5, 11, msg_col);
+            status_msg_timer -= 1;
+        }
 
         // === Address LEDs (row at y=50) ===
         let led_row_y: i32 = 50;
@@ -563,7 +666,7 @@ fn main() {
         d.draw_text(&format!("FLAGS: S{} Z{} AC{} P{} CY{}", f.s as u8, f.z as u8, f.ac as u8, f.p as u8, f.cy as u8), lp_x + 10, reg_y + 44, 10, txt_dim);
 
         // Help line at bottom
-        d.draw_text("F5:Run/Stop  R:Reset(UART)  Click switches to toggle", lp_x + 10, H - 20, 11, txt_dim);
+        d.draw_text("F5:Run/Stop  F2:LoadProg  F3:SaveDump  R:Reset", lp_x + 10, H - 20, 11, txt_dim);
 
         drop(d);
     }
@@ -653,6 +756,48 @@ fn execute_panel_program(emu: &mut Imsai8080, prog: &PanelProgram) {
                 }
             }
         }
+    }
+}
+
+/// Find the start address from a panel program (first "run" or "deposit" step).
+fn find_program_start(prog: &PanelProgram) -> Option<u16> {
+    for step in &prog.steps {
+        match step {
+            PanelStep::Run { address } => return parse_hex16(address).ok(),
+            PanelStep::Deposit { address, .. } => return parse_hex16(address).ok(),
+            PanelStep::Load { address, .. } => return parse_hex16(address).ok(),
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Build a panel program from the current memory contents.
+/// Dumps `len` bytes starting at `start` into a program with deposit_next steps.
+fn memory_to_program(name: &str, description: &str, start: u16, len: u16, emu: &Imsai8080) -> PanelProgram {
+    let mut steps = Vec::new();
+    // First byte uses deposit (sets address + data)
+    let first_byte = emu.bus.mem_read(start);
+    steps.push(PanelStep::Deposit {
+        address: format!("{:04X}", start),
+        data: format!("{:02X}", first_byte),
+    });
+    // Remaining bytes use deposit_next
+    for i in 1..len {
+        let addr = start.wrapping_add(i);
+        steps.push(PanelStep::Load {
+            address: format!("{:04X}", addr),
+            data: format!("{:02X}", emu.bus.mem_read(addr)),
+        });
+    }
+    // Run at start address
+    steps.push(PanelStep::Run {
+        address: format!("{:04X}", start),
+    });
+    PanelProgram {
+        name: name.to_string(),
+        description: description.to_string(),
+        steps,
     }
 }
 
