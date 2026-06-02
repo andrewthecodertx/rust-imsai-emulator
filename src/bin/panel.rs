@@ -19,8 +19,11 @@ use std::path::{Path, PathBuf};
 enum PickerState {
     /// No picker visible.
     Closed,
-    /// Load picker: showing a scrollable list of .json programs.
-    Load {
+    /// Scrollable file list. `kind` selects what it lists and does on Enter:
+    /// `Program` loads a .json front-panel program, `Disk` mounts a .img disk
+    /// image into drive A.
+    List {
+        kind: PickerKind,
         entries: Vec<PickerEntry>,
         scroll: i32,
         selected: i32,
@@ -29,9 +32,17 @@ enum PickerState {
     Save { filename: String, cursor_blink: i32 },
 }
 
+/// What a `PickerState::List` lists and does when an entry is chosen.
+#[derive(Copy, Clone, PartialEq, Debug)]
+enum PickerKind {
+    Program,
+    Disk,
+}
+
 /// Action to take after the picker match block (avoids borrow conflicts).
 enum PickerAction {
     Load(PathBuf),
+    Mount(PathBuf),
     Save(String),
     Cancel,
 }
@@ -97,6 +108,19 @@ fn default_programs_dir() -> PathBuf {
         }
     }
     PathBuf::from("programs")
+}
+
+/// Directories to scan for disk images (.img/.dsk) in the F4 mount picker:
+/// the current directory, a `disks/` subdir, and the executable's directory.
+fn disk_search_dirs() -> Vec<PathBuf> {
+    let mut dirs = vec![PathBuf::from("."), PathBuf::from("disks")];
+    if let Ok(exe) = env::current_exe() {
+        if let Some(parent) = exe.parent() {
+            dirs.push(parent.to_path_buf());
+            dirs.push(parent.join("disks"));
+        }
+    }
+    dirs
 }
 
 fn load_program_file(path: &PathBuf) -> Result<PanelProgram, String> {
@@ -561,7 +585,8 @@ fn main() {
                     status_msg = "No .json programs in programs/".to_string();
                     status_msg_timer = 180;
                 } else {
-                    picker = PickerState::Load {
+                    picker = PickerState::List {
+                        kind: PickerKind::Program,
                         entries: files,
                         scroll: 0,
                         selected: 0,
@@ -570,6 +595,44 @@ fn main() {
             } else {
                 status_msg = "programs/ directory not found".to_string();
                 status_msg_timer = 180;
+            }
+        }
+        // F4: Open disk picker (list .img disk images and mount into drive A)
+        if rl.is_key_pressed(KeyboardKey::KEY_F4) {
+            let mut files: Vec<PickerEntry> = Vec::new();
+            for dir in disk_search_dirs() {
+                if let Ok(entries_fs) = fs::read_dir(&dir) {
+                    for e in entries_fs.filter_map(|e| e.ok()) {
+                        let path = e.path();
+                        let is_img = path
+                            .extension()
+                            .map_or(false, |ext| ext == "img" || ext == "dsk");
+                        if is_img {
+                            let size = e.metadata().map(|m| m.len()).unwrap_or(0);
+                            files.push(PickerEntry {
+                                name: path
+                                    .file_name()
+                                    .map(|n| n.to_string_lossy().into_owned())
+                                    .unwrap_or_default(),
+                                description: format!("{} bytes  ({})", size, dir.display()),
+                                path,
+                            });
+                        }
+                    }
+                }
+            }
+            files.sort_by(|a, b| a.name.cmp(&b.name));
+            files.dedup_by(|a, b| a.path == b.path);
+            if files.is_empty() {
+                status_msg = "No .img/.dsk disk images found".to_string();
+                status_msg_timer = 180;
+            } else {
+                picker = PickerState::List {
+                    kind: PickerKind::Disk,
+                    entries: files,
+                    scroll: 0,
+                    selected: 0,
+                };
             }
         }
         // F3: Open save picker
@@ -588,7 +651,8 @@ fn main() {
         let mut picker_action: Option<PickerAction> = None;
         match &mut picker {
             PickerState::Closed => {}
-            PickerState::Load {
+            PickerState::List {
+                kind,
                 entries,
                 scroll,
                 selected,
@@ -612,7 +676,10 @@ fn main() {
                     }
                 } else if rl.is_key_pressed(KeyboardKey::KEY_ENTER) {
                     if let Some(entry) = entries.get(*selected as usize).cloned() {
-                        picker_action = Some(PickerAction::Load(entry.path.clone()));
+                        picker_action = Some(match kind {
+                            PickerKind::Program => PickerAction::Load(entry.path.clone()),
+                            PickerKind::Disk => PickerAction::Mount(entry.path.clone()),
+                        });
                     }
                 }
                 // Mouse click to select entry
@@ -699,6 +766,28 @@ fn main() {
                     }
                     picker = PickerState::Closed;
                 }
+                PickerAction::Mount(path) => {
+                    let path_str = path.to_string_lossy().into_owned();
+                    match emu
+                        .bus
+                        .card_mut::<TarbellCard>()
+                        .expect("Tarbell card")
+                        .insert_disk(0, &path_str)
+                    {
+                        Ok(()) => {
+                            let name = path
+                                .file_name()
+                                .map(|n| n.to_string_lossy().into_owned())
+                                .unwrap_or(path_str);
+                            status_msg = format!("Mounted {} in drive A", name);
+                        }
+                        Err(e) => {
+                            status_msg = format!("Mount error: {}", e);
+                        }
+                    }
+                    status_msg_timer = 180;
+                    picker = PickerState::Closed;
+                }
                 PickerAction::Save(filename) => {
                     let addr_val: u16 = addr_sw.iter().enumerate().fold(0u16, |a, (i, &on)| {
                         if on {
@@ -736,8 +825,10 @@ fn main() {
                 }
             }
         }
-        // R: Cold reset (clear memory, STOPPED, delete saved state)
-        if matches!(picker, PickerState::Closed) && rl.is_key_pressed(KeyboardKey::KEY_R) {
+        // R: Cold reset (clear memory, STOPPED, delete saved state).
+        // Suppressed while running so typing an 'R' at a console prompt
+        // (e.g. CP/M's DIR) doesn't wipe the machine -- stop with F5 first.
+        if matches!(picker, PickerState::Closed) && !running && rl.is_key_pressed(KeyboardKey::KEY_R) {
             emu = Imsai8080::new();
             emu.panel.set_address_switches(0x0000);
             emu.process_panel();
@@ -752,18 +843,48 @@ fn main() {
             let _ = std::fs::remove_file(MEMORY_FILE);
         }
 
-        // Keyboard input for terminal (only when running and picker closed)
+        // Keyboard input for the console terminal (only while running and the
+        // picker is closed). Forwards keystrokes to the 8251A UART RX so you
+        // can interact with software running on the machine (e.g. CP/M).
+        //
+        // - Printable characters are sent as-typed (case preserved).
+        // - Ctrl+<A..Z> are sent as control codes 0x01..0x1A (so Ctrl+C warm
+        //   boot, Ctrl+S/Ctrl+Q flow control, etc. reach the guest).
+        // - Enter/Backspace/Tab/Esc are mapped to CR/DEL/HT/ESC.
         if running && matches!(picker, PickerState::Closed) {
-            if let Some(ch) = rl.get_char_pressed() {
-                emu.bus
-                    .serial()
-                    .type_text(&ch.to_uppercase().collect::<String>());
+            let ctrl = rl.is_key_down(KeyboardKey::KEY_LEFT_CONTROL)
+                || rl.is_key_down(KeyboardKey::KEY_RIGHT_CONTROL);
+
+            // Printable text (respects Shift/CapsLock). Control combos don't
+            // produce text here, so this is skipped while Ctrl is held.
+            while let Some(ch) = rl.get_char_pressed() {
+                if !ctrl {
+                    let mut buf = [0u8; 4];
+                    emu.bus.serial().type_text(ch.encode_utf8(&mut buf));
+                }
             }
+
+            // Drain the raw key queue. Used for Ctrl+letter control codes;
+            // also keeps the queue from backing up frame-to-frame.
+            while let Some(key) = rl.get_key_pressed() {
+                let kc = key as i32;
+                if ctrl && (KeyboardKey::KEY_A as i32..=KeyboardKey::KEY_Z as i32).contains(&kc) {
+                    let code = (kc as u8) & 0x1F; // 'A'(0x41) -> 0x01 ... 'Z' -> 0x1A
+                    emu.bus.serial().type_text(&(code as char).to_string());
+                }
+            }
+
             if rl.is_key_pressed(KeyboardKey::KEY_ENTER) {
                 emu.bus.serial().type_text("\r");
             }
             if rl.is_key_pressed(KeyboardKey::KEY_BACKSPACE) {
                 emu.bus.serial().type_text("\x7F");
+            }
+            if rl.is_key_pressed(KeyboardKey::KEY_TAB) {
+                emu.bus.serial().type_text("\t");
+            }
+            if rl.is_key_pressed(KeyboardKey::KEY_ESCAPE) {
+                emu.bus.serial().type_text("\x1B");
             }
         }
 
@@ -1130,14 +1251,14 @@ fn main() {
             d.draw_text_ex(f, &line,
                 raylib::math::Vector2::new(10.0, (REF_H - 24) as f32),
                 14.0, 1.0, txt_dim);
-            d.draw_text_ex(f, "F5 run/stop  F2 load  F3 save  R reset",
-                raylib::math::Vector2::new((REF_W - 420) as f32, (REF_H - 24) as f32),
+            d.draw_text_ex(f, "F5 run/stop  F2 load  F4 disk  F3 save  R reset",
+                raylib::math::Vector2::new((REF_W - 520) as f32, (REF_H - 24) as f32),
                 14.0, 1.0, txt_dim);
         } else {
             d.draw_text(&line, 10, REF_H - 22, 14, txt_dim);
             d.draw_text(
-                "F5 run/stop  F2 load  F3 save  R reset",
-                REF_W - 400,
+                "F5 run/stop  F2 load  F4 disk  F3 save  R reset",
+                REF_W - 500,
                 REF_H - 22,
                 14,
                 txt_dim,
@@ -1277,22 +1398,32 @@ fn main() {
             d.draw_rectangle_lines(overlay_x, overlay_y, overlay_w, overlay_h, panel_edge);
 
             match &picker {
-                PickerState::Load {
+                PickerState::List {
+                    kind,
                     entries,
                     scroll,
                     selected,
                 } => {
+                    let (title, help) = match kind {
+                        PickerKind::Program => (
+                            "LOAD PROGRAM",
+                            "Up/Down navigate   Enter load   Esc cancel",
+                        ),
+                        PickerKind::Disk => (
+                            "MOUNT DISK (drive A)",
+                            "Up/Down navigate   Enter mount   Esc cancel",
+                        ),
+                    };
                     if let Some(f) = tf {
-                        d.draw_text_ex(f, "LOAD PROGRAM",
+                        d.draw_text_ex(f, title,
                             raylib::math::Vector2::new((overlay_x + 10) as f32, (overlay_y + 8) as f32),
                             18.0, 1.0, txt_bright);
-                        d.draw_text_ex(f, "Up/Down navigate   Enter load   Esc cancel",
+                        d.draw_text_ex(f, help,
                             raylib::math::Vector2::new((overlay_x + 10) as f32, (overlay_y + 30) as f32),
                             12.0, 1.0, txt_dim);
                     } else {
-                        d.draw_text("LOAD PROGRAM", overlay_x + 10, overlay_y + 8, 16, txt_bright);
-                        d.draw_text("Up/Down = navigate    Enter = load    Esc = cancel",
-                            overlay_x + 10, overlay_y + 28, 10, txt_dim);
+                        d.draw_text(title, overlay_x + 10, overlay_y + 8, 16, txt_bright);
+                        d.draw_text(help, overlay_x + 10, overlay_y + 28, 10, txt_dim);
                     }
                     let list_y = overlay_y + 52;
                     let list_h = overlay_h - 72;
