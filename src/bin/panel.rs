@@ -24,10 +24,13 @@ const H: i32 = 720;
 const LED_SIZE: i32 = 14;
 const LED_GAP: i32 = 22;
 
-// Switch dimensions
-const SW_W: i32 = 22;
-const SW_H: i32 = 36;
+// Switch dimensions (paddle-style toggle switches)
+// Each switch slot is taller to show the paddle flipping up/down
+const SW_W: i32 = 18;
+const SW_H: i32 = 44;
 const SW_GAP: i32 = 28;
+const SW_PADDLE_H: i32 = 18;  // visible paddle height
+const SW_PLATE_H: i32 = 4;    // base plate thickness
 
 // Button dimensions
 const BTN_W: i32 = 80;
@@ -134,8 +137,14 @@ fn main() {
     let led_on    = raylib::color::Color { r: 0, g: 255, b: 60, a: 255 };
     let led_off   = raylib::color::Color { r: 30, g: 30, b: 30, a: 255 };
     let led_red   = raylib::color::Color { r: 255, g: 40, b: 40, a: 255 };
-    let sw_on     = raylib::color::Color { r: 220, g: 200, b: 160, a: 255 };
-    let sw_off    = raylib::color::Color { r: 60, g: 55, b: 50, a: 255 };
+    // Switch colors: paddle is metallic, slot is dark recess
+    let sw_paddle = raylib::color::Color { r: 200, g: 195, b: 185, a: 255 }; // metallic silver
+    let sw_paddle_hi = raylib::color::Color { r: 240, g: 235, b: 225, a: 255 }; // highlight edge
+    let sw_paddle_lo = raylib::color::Color { r: 140, g: 135, b: 125, a: 255 }; // shadow edge
+    let sw_slot   = raylib::color::Color { r: 15, g: 15, b: 18, a: 255 };       // recessed slot
+    let sw_slot_rim = raylib::color::Color { r: 55, g: 52, b: 48, a: 255 };      // slot rim
+    let sw_tip_on  = raylib::color::Color { r: 255, g: 60, b: 60, a: 255 };      // red tip for ON
+    let sw_tip_off = raylib::color::Color { r: 80, g: 80, b: 80, a: 255 };       // dark tip for OFF
     let txt       = raylib::color::Color { r: 200, g: 200, b: 180, a: 255 };
     let txt_dim   = raylib::color::Color { r: 120, g: 120, b: 110, a: 255 };
     let t_fg      = raylib::color::Color { r: 0, g: 220, b: 80, a: 255 };
@@ -320,22 +329,24 @@ fn main() {
             d.draw_text(lbl, x + 14, status_y - 1, 10, txt);
         }
 
-        // === Address switches (row at y=320) ===
+        // === Address switches (paddle toggles at y=310) ===
         let addr_sw_y: i32 = 310;
         d.draw_text(&format!("ADDR {:04X}", addr_val), lp_x + 10, addr_sw_y - 16, 13, txt);
         for i in 0..16usize {
             let x = lp_x + 10 + i as i32 * SW_GAP;
-            d.draw_rectangle(x, addr_sw_y, SW_W, SW_H, if addr_sw[i] { sw_on } else { sw_off });
-            d.draw_text(if addr_sw[i] { "1" } else { "0" }, x + 6, addr_sw_y + 10, 11, txt);
+            draw_toggle_switch(&mut d, x, addr_sw_y, SW_W, SW_H, SW_PADDLE_H, SW_PLATE_H,
+                addr_sw[i], sw_slot, sw_slot_rim, sw_paddle, sw_paddle_hi, sw_paddle_lo,
+                sw_tip_on, sw_tip_off);
         }
 
-        // === Data switches (row at y=400) ===
+        // === Data switches (paddle toggles at y=385) ===
         let data_sw_y: i32 = 385;
         d.draw_text(&format!("DATA {:02X}", data_val), lp_x + 10, data_sw_y - 16, 13, txt);
         for i in 0..8usize {
             let x = lp_x + 10 + i as i32 * SW_GAP;
-            d.draw_rectangle(x, data_sw_y, SW_W, SW_H, if data_sw[i] { sw_on } else { sw_off });
-            d.draw_text(if data_sw[i] { "1" } else { "0" }, x + 6, data_sw_y + 10, 11, txt);
+            draw_toggle_switch(&mut d, x, data_sw_y, SW_W, SW_H, SW_PADDLE_H, SW_PLATE_H,
+                data_sw[i], sw_slot, sw_slot_rim, sw_paddle, sw_paddle_hi, sw_paddle_lo,
+                sw_tip_on, sw_tip_off);
         }
 
         // === Function buttons (row at y=470) ===
@@ -410,10 +421,52 @@ fn main() {
         d.draw_text(&format!("FLAGS: S{} Z{} AC{} P{} CY{}", f.s as u8, f.z as u8, f.ac as u8, f.p as u8, f.cy as u8), lp_x + 10, reg_y + 44, 10, txt_dim);
 
         // Help line at bottom
-        d.draw_text("F5:Run/Stop  R:Reset  Click switches/buttons to interact", lp_x + 10, H - 20, 11, txt_dim);
+        d.draw_text("F5:Run/Stop  R:Reset(UART)  Click switches to toggle", lp_x + 10, H - 20, 11, txt_dim);
 
         drop(d);
     }
+}
+
+/// Draw an IMSAI-style paddle toggle switch.
+///
+/// The switch sits in a recessed slot. When ON, the paddle flips up
+/// (paddle extends from top half of slot, red tip visible at top).
+/// When OFF, the paddle flips down (paddle extends from bottom half,
+/// dark tip visible at bottom).
+fn draw_toggle_switch(
+    d: &mut raylib::drawing::RaylibDrawHandle,
+    x: i32, y: i32, w: i32, h: i32, paddle_h: i32, plate_h: i32,
+    is_on: bool,
+    slot_color: raylib::color::Color,
+    rim_color: raylib::color::Color,
+    paddle_color: raylib::color::Color,
+    paddle_hi: raylib::color::Color,
+    paddle_lo: raylib::color::Color,
+    tip_on: raylib::color::Color,
+    tip_off: raylib::color::Color,
+) {
+    // Outer slot (recessed dark rectangle with rim)
+    d.draw_rectangle(x - 1, y - 1, w + 2, h + 2, rim_color);
+    d.draw_rectangle(x, y, w, h, slot_color);
+
+    // The paddle fills half the slot vertically, positioned at top (ON) or bottom (OFF)
+    let paddle_y = if is_on { y } else { y + h - paddle_h };
+    let tip_y = if is_on { y } else { y + h - plate_h };
+
+    // Paddle body
+    d.draw_rectangle(x + 1, paddle_y + plate_h, w - 2, paddle_h - plate_h, paddle_color);
+    // Paddle highlight (left edge lighter)
+    d.draw_rectangle(x + 1, paddle_y + plate_h, 2, paddle_h - plate_h, paddle_hi);
+    // Paddle shadow (right edge darker)
+    d.draw_rectangle(x + w - 3, paddle_y + plate_h, 2, paddle_h - plate_h, paddle_lo);
+    // Top cap of paddle (the tip, colored red=ON or dark=OFF)
+    d.draw_rectangle(x + 1, tip_y, w - 2, plate_h, if is_on { tip_on } else { tip_off });
+    // Tip highlight
+    d.draw_rectangle(x + 1, tip_y, 2, plate_h, if is_on {
+        raylib::color::Color { r: 255, g: 120, b: 120, a: 255 }
+    } else {
+        raylib::color::Color { r: 100, g: 100, b: 100, a: 255 }
+    });
 }
 
 /// Boot CP/M 2.2 from disk: load system tracks and install BIOS.
