@@ -1,5 +1,6 @@
 use std::env;
 use std::io::{self, Write};
+use std::path::PathBuf;
 use std::time::Instant;
 
 use crossterm::{
@@ -13,49 +14,236 @@ use rust_imsai_emulator::TarbellCard;
 /// CCP base address for 64K CP/M 2.2 system
 const CPMB: u16 = 0xE400;
 
+/// A front panel program step (same format as the GUI uses).
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(tag = "action")]
+#[serde(rename_all = "snake_case")]
+enum PanelStep {
+    Deposit { address: String, data: String },
+    DepositNext { data: String },
+    Examine { address: String },
+    ExamineNext,
+    Run { address: String },
+    Load { address: String, data: String },
+}
+
+/// A front panel program (same format as the GUI uses).
+#[derive(Debug, Clone, serde::Deserialize)]
+struct PanelProgram {
+    #[allow(dead_code)]
+    name: String,
+    #[allow(dead_code)]
+    #[serde(default)]
+    description: String,
+    steps: Vec<PanelStep>,
+}
+
+fn parse_hex8(s: &str) -> Result<u8, String> {
+    let s = s.trim().trim_start_matches("0x").trim_start_matches("0X");
+    u8::from_str_radix(s, 16).map_err(|e| format!("Invalid hex byte '{}': {}", s, e))
+}
+
+fn parse_hex16(s: &str) -> Result<u16, String> {
+    let s = s.trim().trim_start_matches("0x").trim_start_matches("0X");
+    u16::from_str_radix(s, 16).map_err(|e| format!("Invalid hex address '{}': {}", s, e))
+}
+
+fn parse_hex_bytes(s: &str) -> Result<Vec<u8>, String> {
+    s.split_whitespace().map(|b| parse_hex8(b)).collect()
+}
+
+fn execute_panel_program(emu: &mut rust_imsai_emulator::Imsai8080, prog: &PanelProgram) {
+    for step in &prog.steps {
+        match step {
+            PanelStep::Deposit { address, data } => {
+                let addr = parse_hex16(address).unwrap_or(0);
+                let byte = parse_hex8(data).unwrap_or(0);
+                emu.panel.set_address_switches(addr);
+                emu.panel.set_data_switches(byte);
+                emu.panel.press_switch(rust_imsai_emulator::cards::PanelSwitch::Deposit);
+                emu.process_panel();
+            }
+            PanelStep::DepositNext { data } => {
+                let byte = parse_hex8(data).unwrap_or(0);
+                emu.panel.set_data_switches(byte);
+                emu.panel.press_switch(rust_imsai_emulator::cards::PanelSwitch::DepositNext);
+                emu.process_panel();
+            }
+            PanelStep::Examine { address } => {
+                let addr = parse_hex16(address).unwrap_or(0);
+                emu.panel.set_address_switches(addr);
+                emu.panel.press_switch(rust_imsai_emulator::cards::PanelSwitch::Examine);
+                emu.process_panel();
+            }
+            PanelStep::ExamineNext => {
+                emu.panel.press_switch(rust_imsai_emulator::cards::PanelSwitch::ExamineNext);
+                emu.process_panel();
+            }
+            PanelStep::Run { address } => {
+                let addr = parse_hex16(address).unwrap_or(0);
+                emu.panel.set_address_switches(addr);
+                emu.panel.press_switch(rust_imsai_emulator::cards::PanelSwitch::RunStop);
+                emu.process_panel();
+            }
+            PanelStep::Load { address, data } => {
+                let addr = parse_hex16(address).unwrap_or(0);
+                if let Ok(bytes) = parse_hex_bytes(data) {
+                    emu.load_program(addr, &bytes);
+                }
+            }
+        }
+    }
+}
+
+fn find_program_start(prog: &PanelProgram) -> Option<u16> {
+    for step in &prog.steps {
+        match step {
+            PanelStep::Run { address } => return parse_hex16(address).ok(),
+            PanelStep::Deposit { address, .. } => return parse_hex16(address).ok(),
+            PanelStep::Load { address, .. } => return parse_hex16(address).ok(),
+            _ => {}
+        }
+    }
+    None
+}
+
+fn load_program_file(path: &PathBuf) -> Result<PanelProgram, String> {
+    let contents = std::fs::read_to_string(path)
+        .map_err(|e| format!("Failed to read {}: {}", path.display(), e))?;
+    serde_json::from_str(&contents)
+        .map_err(|e| format!("Failed to parse {}: {}", path.display(), e))
+}
+
+fn print_usage(args: &Vec<String>) {
+    eprintln!("IMSAI 8080 Emulator - Terminal Mode");
+    eprintln!();
+    eprintln!("Usage: {} [OPTIONS]", args.get(0).unwrap_or(&"rust-imsai-emulator".to_string()));
+    eprintln!();
+    eprintln!("Mode (choose one):");
+    eprintln!("  <disk_image.img>         Boot CP/M 2.2 from disk image");
+    eprintln!("  --load <file> [addr]     Load raw binary at address (default 0x0000)");
+    eprintln!("  --program <file.json>     Load a front panel program (.json)");
+    eprintln!("  (no arguments)           Start with empty memory (bare-metal)");
+    eprintln!();
+    eprintln!("Options:");
+    eprintln!("  --batch, -b         Batch mode (non-interactive, 50M instructions)");
+    eprintln!("  --trace, -t         Trace every instruction");
+    eprintln!("  --vtrace, -v        Verbose trace (with I/O logging)");
+    eprintln!("  --diag, -d          Diagnostic mode (I/O log + region tracking)");
+    eprintln!("  --step, -s          Step trace (first 500 instructions)");
+    eprintln!("  --pctrace, -p       PC ring-buffer trace (last 8K instructions)");
+    eprintln!("  --script            Scripted mode (captures console output)");
+    eprintln!("  --cmd \"text\"        Pre-load keyboard input for scripted testing");
+    eprintln!("  --help, -h          Show this help");
+}
+
 fn main() {
     let args: Vec<String> = env::args().collect();
+
+    if args.contains(&"--help".to_string()) || args.contains(&"-h".to_string()) {
+        print_usage(&args);
+        return;
+    }
+
     let trace = args.contains(&"--trace".to_string()) || args.contains(&"-t".to_string());
     let verbose_trace = args.contains(&"--vtrace".to_string()) || args.contains(&"-v".to_string());
     let diag = args.contains(&"--diag".to_string()) || args.contains(&"-d".to_string());
     let step_trace = args.contains(&"--step".to_string()) || args.contains(&"-s".to_string());
     let pc_trace = args.contains(&"--pctrace".to_string()) || args.contains(&"-p".to_string());
     let batch_mode = args.contains(&"--batch".to_string()) || args.contains(&"-b".to_string());
+
     // --cmd "DIR\r" pre-loads keyboard input for scripted testing
     let cmd_text = args.iter().position(|a| a == "--cmd")
         .and_then(|i| args.get(i + 1))
         .map(|s| s.clone());
-    let disk_path = if let Some(cmd_idx) = args.iter().position(|a| a == "--cmd") {
-        args.iter().skip(1)
-            .enumerate()
-            .filter(|(i, a)| *i != cmd_idx && *i != cmd_idx + 1 && !a.starts_with('-'))
-            .map(|(_, a)| a.as_str())
-            .next()
+
+    // --load <file> [addr]: load raw binary at address
+    let load_arg = args.iter().position(|a| a == "--load")
+        .and_then(|i| args.get(i + 1))
+        .map(|s| s.to_string());
+
+    // --program <file.json>: load front panel program
+    let program_arg = args.iter().position(|a| a == "--program")
+        .and_then(|i| args.get(i + 1))
+        .map(|s| s.to_string());
+
+    // First positional argument (not a flag or flag value) is the disk image
+    let mut flagged_values: Vec<String> = vec![];
+    for flag in &["--cmd", "--load", "--program"] {
+        if let Some(idx) = args.iter().position(|a| a == flag) {
+            if let Some(v) = args.get(idx + 1) { flagged_values.push(v.clone()); }
+            if *flag == "--load" { if let Some(v) = args.get(idx + 2) { flagged_values.push(v.clone()); } }
+        }
+    }
+    let disk_path = args.iter().skip(1)
+        .filter(|a| !a.starts_with('-'))
+        .filter(|a| !flagged_values.contains(a))
+        .next()
+        .map(|s| s.to_string());
+
+    // --load address (optional, after the filename)
+    let load_addr: u16 = if load_arg.is_some() {
+        let load_idx = args.iter().position(|a| a == "--load").unwrap();
+        args.get(load_idx + 2)
+            .and_then(|s| u16::from_str_radix(s.trim_start_matches("0x").trim_start_matches("0X"), 16).ok())
+            .unwrap_or(0)
     } else {
-        args.iter().skip(1).find(|a| !a.starts_with('-')).map(|s| s.as_str())
+        0
     };
 
     let mut emu = rust_imsai_emulator::Imsai8080::new();
+    let mut start_pc: Option<u16> = None;
 
-    let disk_file = if let Some(path) = disk_path {
-        path.to_string()
-    } else {
-        eprintln!("Usage: {} <disk_image.img> [options]", args.get(0).unwrap());
-        eprintln!("Options: --batch  --trace  --vtrace  --diag  --step  --pctrace  --script  --cmd \"text\"");
-        return;
-    };
-
-    match emu.bus.card_mut::<TarbellCard>().expect("Tarbell card")
-        .insert_disk(0, &disk_file) {
-        Ok(()) => println!("Loaded disk: {}", disk_file),
-        Err(e) => {
-            eprintln!("Error loading disk '{}': {}", disk_file, e);
-            return;
+    // Determine what to load
+    if let Some(ref path) = program_arg {
+        // Load a front panel program (.json)
+        let pbuf = PathBuf::from(path);
+        match load_program_file(&pbuf) {
+            Ok(prog) => {
+                let start = find_program_start(&prog).unwrap_or(0);
+                eprintln!("Loaded program: {} (start at 0x{:04X})", prog.name, start);
+                execute_panel_program(&mut emu, &prog);
+                start_pc = Some(start);
+            }
+            Err(e) => {
+                eprintln!("Error loading program '{}': {}", path, e);
+                return;
+            }
         }
+    } else if let Some(ref path) = load_arg {
+        // Load a raw binary file at an address
+        match std::fs::read(path) {
+            Ok(data) => {
+                eprintln!("Loaded {} bytes from {} at 0x{:04X}", data.len(), path, load_addr);
+                emu.load_program(load_addr, &data);
+                start_pc = Some(load_addr);
+            }
+            Err(e) => {
+                eprintln!("Error loading '{}': {}", path, e);
+                return;
+            }
+        }
+    } else if let Some(ref disk_file) = disk_path {
+        // Boot CP/M from disk image
+        match emu.bus.card_mut::<TarbellCard>().expect("Tarbell card")
+            .insert_disk(0, disk_file) {
+            Ok(()) => println!("Loaded disk: {}", disk_file),
+            Err(e) => {
+                eprintln!("Error loading disk '{}': {}", disk_file, e);
+                return;
+            }
+        }
+        boot_cpm(&mut emu);
+    } else {
+        // Bare-metal: empty memory, no program loaded
+        eprintln!("IMSAI 8080 - Bare-metal mode (empty memory, no program loaded)");
+        eprintln!("Use --load <file> or --program <file.json> to load a program.");
     }
 
-    // Boot CP/M: load system tracks and install our BIOS
-    boot_cpm(&mut emu);
+    // Set start PC if we loaded something
+    if let Some(pc) = start_pc {
+        emu.cpu.pc = pc;
+    }
 
     // Pre-load keyboard with --cmd text (convert escape sequences)
     if let Some(ref cmd) = cmd_text {
@@ -81,6 +269,7 @@ fn main() {
         run_terminal(&mut emu);
     }
 }
+
 fn boot_cpm(emu: &mut rust_imsai_emulator::Imsai8080) {
     // CP/M 2.2 64K boot: load system tracks from disk image.
     //
@@ -88,19 +277,14 @@ fn boot_cpm(emu: &mut rust_imsai_emulator::Imsai8080) {
     // (CCP=0xE400, BDOS=0xEC06) on its first 2-3 tracks. We load the
     // system tracks into memory, then install our own BIOS at 0xFA00.
     const BIOS_BASE: u16 = 0xFA00;
-
-    let mut mem_addr: u16 = CPMB; // 0xE400
+    let mut mem_addr: u16 = CPMB;
     let mut sectors_loaded: u16 = 0;
 
-    // Load system tracks (tracks 0 through OFF-1) into memory at 0xE400.
-    // Skip track 0 sector 1 (boot sector placeholder).
     for track in 0..2u8 {
         for sector in 1..=26u8 {
             if track == 0 && sector == 1 {
-                continue; // skip boot sector
+                continue;
             }
-
-            // Read sector from disk, then write to memory
             let sector_data = match emu.bus.tarbell().get_disk(0) {
                 Some(disk) => match disk.read_sector(track, sector) {
                     Ok(data) => data,
@@ -116,7 +300,7 @@ fn boot_cpm(emu: &mut rust_imsai_emulator::Imsai8080) {
             };
 
             if mem_addr >= BIOS_BASE {
-                continue; // don't overwrite BIOS area
+                continue;
             }
             let end = mem_addr as usize + sector_data.len();
             if end > BIOS_BASE as usize {
@@ -140,13 +324,11 @@ fn boot_cpm(emu: &mut rust_imsai_emulator::Imsai8080) {
     println!("Loaded {} sectors ({} bytes) into 0x{:04X}-0x{:04X}",
         sectors_loaded, bytes_loaded, CPMB, CPMB + bytes_loaded);
 
-    // Install our custom BIOS at 0xFA00.
     rust_imsai_emulator::Bios::install_jump_table(&mut emu.bus);
-
-    // Start at CCP cold-start entry at 0xE400.
     emu.cpu.pc = CPMB;
     emu.cpu.sp = 0x0000;
 }
+
 fn run_step_trace(emu: &mut rust_imsai_emulator::Imsai8080, max: u64) {
     println!("=== STEP TRACE ({} instructions) ===", max);
     let mut count: u64 = 0;
