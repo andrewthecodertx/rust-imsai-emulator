@@ -33,6 +33,46 @@ Defaults to running the UART test program (prints "A" continuously on the consol
 | `--bare` | Start with empty memory, front panel only |
 | `--load <file> [0xADDR]` | Load raw binary file at address |
 | `--disk <file>` | Load disk image and boot CP/M 2.2 |
+| `--program <file>` | Load and execute a front panel program (JSON) |
+
+### Front Panel Programs
+
+Programs are JSON files describing sequences of switch positions and button presses, just like operating the real front panel. Create them in the `PROGRAMS/` directory.
+
+```json
+{
+  "name": "UART Test",
+  "description": "Prints 'A' continuously to the UART",
+  "steps": [
+    { "action": "deposit", "address": "0000", "data": "3E" },
+    { "action": "deposit_next", "data": "4E" },
+    { "action": "deposit_next", "data": "D3" },
+    { "action": "deposit_next", "data": "01" },
+    { "action": "run", "address": "0000" }
+  ]
+}
+```
+
+Step types:
+
+| Action | Fields | Effect |
+|--------|--------|--------|
+| `deposit` | `address`, `data` | Set address and data switches, press DEPOSIT |
+| `deposit_next` | `data` | Set data switches, press DEPOSIT NEXT (auto-advances) |
+| `examine` | `address` | Set address switches, press EXAMINE |
+| `examine_next` | (none) | Press EXAMINE NEXT (auto-advances) |
+| `run` | `address` | Set address switches, press RUN/STOP |
+| `load` | `address`, `data` | Load hex bytes directly into memory (no switch toggling) |
+
+The `load` action is a shortcut that writes bytes via `load_program()` instead of toggling each byte through the front panel. Use it for longer programs. The other actions operate the front panel interface exactly as a human would.
+
+```bash
+# Run the UART test program (toggles each byte in via front panel)
+cargo run --bin imsai-panel -- --program PROGRAMS/01-uart-test.json
+
+# Same program using fast load (loads all bytes at once)
+cargo run --bin imsai-panel -- --program PROGRAMS/02-uart-test-fast.json
+```
 
 ### Front Panel Controls
 

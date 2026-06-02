@@ -10,11 +10,88 @@
 //!   imsai-panel --disk <file>         Load disk image and boot CP/M
 
 use std::env;
+use std::fs;
+use std::path::PathBuf;
+use raylib::prelude::RaylibDraw;
+
+// === Front panel program format ===
+// A program is a saved sequence of switch positions and button presses,
+// exactly as you would operate the real IMSAI 8080 front panel.
+// The "load" action writes raw bytes at an address (like load_program).
+// The "step" actions set switches then press a button.
+
+/// One step in a front panel program.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "action")]
+#[serde(rename_all = "snake_case")]
+enum PanelStep {
+    /// Set address switches to this value, set data switches to this value,
+    /// then press DEPOSIT. Advances address by 1 (like real hardware).
+    Deposit { address: String, data: String },
+    /// Set data switches, press DEPOSIT NEXT. Address auto-advances.
+    DepositNext { data: String },
+    /// Set address switches, press EXAMINE. Reads byte at that address.
+    Examine { address: String },
+    /// Press EXAMINE NEXT. Reads next byte.
+    ExamineNext,
+    /// Set address switches, then press RUN/STOP to start execution.
+    Run { address: String },
+    /// Load raw bytes into memory starting at address (bypasses front panel).
+    /// Used for convenience when you don't want to toggle every byte.
+    Load { address: String, data: String },
+}
+
+/// A front panel program: named sequence of steps.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PanelProgram {
+    name: String,
+    #[serde(default)]
+    description: String,
+    steps: Vec<PanelStep>,
+}
+
+fn default_programs_dir() -> PathBuf {
+    let exe_dir = env::current_exe().unwrap_or_else(|_| PathBuf::from("."));
+    exe_dir.parent().unwrap_or(std::path::Path::new(".")).join("PROGRAMS")
+}
+
+fn load_program_file(path: &PathBuf) -> Result<PanelProgram, String> {
+    let contents = fs::read_to_string(path)
+        .map_err(|e| format!("Failed to read {}: {}", path.display(), e))?;
+    serde_json::from_str(&contents)
+        .map_err(|e| format!("Failed to parse {}: {}", path.display(), e))
+}
+
+fn save_program_file(prog: &PanelProgram, path: &PathBuf) -> Result<(), String> {
+    let json = serde_json::to_string_pretty(prog)
+        .map_err(|e| format!("Failed to serialize: {}", e))?;
+    fs::write(path, json)
+        .map_err(|e| format!("Failed to write {}: {}", path.display(), e))
+}
+
+/// Parse a hex string like "3E" or "0x3E" into a u8.
+fn parse_hex8(s: &str) -> Result<u8, String> {
+    let s = s.trim().trim_start_matches("0x").trim_start_matches("0X");
+    u8::from_str_radix(s, 16).map_err(|e| format!("Invalid hex byte '{}': {}", s, e))
+}
+
+/// Parse a hex address like "0000" or "0x0000" into a u16.
+fn parse_hex16(s: &str) -> Result<u16, String> {
+    let s = s.trim().trim_start_matches("0x").trim_start_matches("0X");
+    u16::from_str_radix(s, 16).map_err(|e| format!("Invalid hex address '{}': {}", s, e))
+}
+
+/// Parse a hex data string like "3E 4E D3 01" into bytes.
+fn parse_hex_bytes(s: &str) -> Result<Vec<u8>, String> {
+    s.split_whitespace()
+        .map(|b| parse_hex8(b))
+        .collect()
+}
 use rust_imsai_emulator::Imsai8080;
 use rust_imsai_emulator::TarbellCard;
 use rust_imsai_emulator::cards::PanelSwitch;
 use raylib::consts::{KeyboardKey, MouseButton};
-use raylib::prelude::RaylibDraw;
+use serde::{Deserialize, Serialize};
 
 // Window size
 const W: i32 = 1100;
@@ -70,6 +147,23 @@ fn main() {
         .and_then(|i| args.get(i + 1).cloned());
     let disk_arg = args.iter().position(|a| a == "--disk")
         .and_then(|i| args.get(i + 1).cloned());
+    let program_arg = args.iter().position(|a| a == "--program")
+        .and_then(|i| args.get(i + 1).cloned());
+
+    if args.contains(&"--help".to_string()) || args.contains(&"-h".to_string()) {
+        eprintln!("IMSAI 8080 Front Panel");
+        eprintln!();
+        eprintln!("Usage: imsai-panel [OPTIONS]");
+        eprintln!();
+        eprintln!("Options:");
+        eprintln!("  (default)           Start with UART test program running");
+        eprintln!("  --bare              Start with empty memory (front panel only)");
+        eprintln!("  --load <file> [addr] Load raw binary at address (default 0x0000)");
+        eprintln!("  --disk <file>       Load disk image and boot CP/M 2.2");
+        eprintln!("  --program <file>    Load and execute a front panel program (.json)");
+        eprintln!("  --help, -h          Show this help");
+        return;
+    }
 
     let (mut rl, thread) = raylib::init()
         .size(W, H)
@@ -84,7 +178,21 @@ fn main() {
 
     // Load program/disk based on arguments
     let auto_run = if !bare {
-        if let Some(ref path) = disk_arg {
+        if let Some(ref path) = program_arg {
+            // Load and execute a front panel program
+            let pbuf = PathBuf::from(path);
+            match load_program_file(&pbuf) {
+                Ok(prog) => {
+                    eprintln!("Loaded program: {}", prog.name);
+                    execute_panel_program(&mut emu, &prog);
+                    true
+                }
+                Err(e) => {
+                    eprintln!("Error: {}", e);
+                    false
+                }
+            }
+        } else if let Some(ref path) = disk_arg {
             match emu.bus.card_mut::<TarbellCard>().unwrap().insert_disk(0, path) {
                 Ok(()) => {
                     boot_cpm(&mut emu);
@@ -501,6 +609,51 @@ fn draw_toggle_switch(
     } else {
         raylib::color::Color { r: 100, g: 100, b: 100, a: 255 }
     });
+}
+
+/// Execute a front panel program: walk through each step, setting switches
+/// and pressing buttons via the front panel interface, just like a human would.
+fn execute_panel_program(emu: &mut Imsai8080, prog: &PanelProgram) {
+    for step in &prog.steps {
+        match step {
+            PanelStep::Deposit { address, data } => {
+                let addr = parse_hex16(address).unwrap_or(0);
+                let byte = parse_hex8(data).unwrap_or(0);
+                emu.panel.set_address_switches(addr);
+                emu.panel.set_data_switches(byte);
+                emu.panel.press_switch(PanelSwitch::Deposit);
+                emu.process_panel();
+            }
+            PanelStep::DepositNext { data } => {
+                let byte = parse_hex8(data).unwrap_or(0);
+                emu.panel.set_data_switches(byte);
+                emu.panel.press_switch(PanelSwitch::DepositNext);
+                emu.process_panel();
+            }
+            PanelStep::Examine { address } => {
+                let addr = parse_hex16(address).unwrap_or(0);
+                emu.panel.set_address_switches(addr);
+                emu.panel.press_switch(PanelSwitch::Examine);
+                emu.process_panel();
+            }
+            PanelStep::ExamineNext => {
+                emu.panel.press_switch(PanelSwitch::ExamineNext);
+                emu.process_panel();
+            }
+            PanelStep::Run { address } => {
+                let addr = parse_hex16(address).unwrap_or(0);
+                emu.panel.set_address_switches(addr);
+                emu.panel.press_switch(PanelSwitch::RunStop);
+                emu.process_panel();
+            }
+            PanelStep::Load { address, data } => {
+                let addr = parse_hex16(address).unwrap_or(0);
+                if let Ok(bytes) = parse_hex_bytes(data) {
+                    emu.load_program(addr, &bytes);
+                }
+            }
+        }
+    }
 }
 
 /// Boot CP/M 2.2 from disk: load system tracks and install BIOS.
