@@ -11,6 +11,12 @@ path = "src/lib.rs"
 name = "rust-imsai-emulator"
 path = "src/main.rs"
 
+# Front panel GUI (raylib) - optional, requires raylib C library
+[[bin]]
+name = "imsai-panel"
+path = "src/bin/panel.rs"
+
 [dependencies]
 crossterm = "0.29.0"
 intel8080 = { git = "https://github.com/andrewthecodertx/rust-intel8080-emulator" }
+raylib = "5.5.1"

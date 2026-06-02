@@ -1,6 +1,6 @@
 # IMSAI 8080 Emulator
 
-A Rust emulator for the IMSAI 8080 that boots CP/M 2.2 with a custom BIOS and Tarbell floppy controller.
+A Rust emulator for the IMSAI 8080 that boots CP/M 2.2 with a custom BIOS and Tarbell floppy controller. Includes a raylib front panel GUI with toggle switches, LEDs, and a console display.
 
 ## What It Does
 
@@ -13,31 +13,48 @@ Emulates the IMSAI 8080 hardware (CPU, memory, Tarbell disk controller, console 
 - Intel 8080 CPU ([rust-intel8080-emulator](https://github.com/andrewthecodertx/rust-intel8080-emulator))
 - 64KB RAM
 - Tarbell 1011 floppy disk controller (FD1771, 8" SSSD, ports 0x48-0x4B)
-- IMSAI VIO video board (80x24 character display, ports 0x00-0x01)
+- IMSAI SIO-2 dual serial board (2x Intel 8251A UART, ports 0x00-0x03)
+- IMSAI 8080 front panel (toggle switches, LEDs, function buttons)
 - S-100 bus connecting all components
 
-## CP/M 2.2 Memory Map
+## Front Panel GUI
 
-| Address   | Contents                              |
-|-----------|---------------------------------------|
-| 0x0000    | Vectors (JMP WBOOT, JMP BDOS)        |
-| 0x0100    | TPA (Transient Program Area)           |
-| 0xE400    | CCP (loaded from disk image)           |
-| 0xEC00    | BDOS (loaded from disk image)           |
-| 0xF000    | BDOS data area                         |
-| 0xFA00    | Custom BIOS (17-entry jump table)      |
-| 0xFB30    | DPH + DIRBUF + CSV + ALV               |
-
-## Quick Start
+The `imsai-panel` binary provides a visual raylib front panel:
 
 ```bash
-cargo build --release
-./target/release/rust-imsai-emulator <disk_image.img>
+cargo run --bin imsai-panel
+```
+
+Defaults to running the UART test program (prints "A" continuously on the console display).
+
+| Flag | Description |
+|------|-------------|
+| (none) | Start with UART test program running (demo mode) |
+| `--bare` | Start with empty memory, front panel only |
+| `--load <file> [0xADDR]` | Load raw binary file at address |
+| `--disk <file>` | Load disk image and boot CP/M 2.2 |
+
+### Front Panel Controls
+
+| Control | Action |
+|---------|--------|
+| Mouse click on address switches | Toggle address bits (A15-A0) |
+| Mouse click on data switches | Toggle data bits (D7-D0) |
+| RUN/STOP button or F5 | Start/stop CPU execution |
+| STEP button | Execute one instruction |
+| EXAMINE button | Read byte at address switches into data LEDs |
+| DEPOSIT button | Write data switches into memory at address switches |
+| EX NXT / DEP NXT | Increment address then examine/deposit |
+| R key | Reset to UART test program |
+| Keyboard (when running) | Send characters to console UART |
+
+### Terminal Mode (CLI)
+
+```bash
+cargo run --release -- <disk_image.img>
 ```
 
 Requires a CP/M 2.2 disk image (256,256 bytes, 77 tracks x 26 sectors x 128 bytes). The system tracks must contain CCP+BDOS assembled for addresses 0xE400/0xEC06 with the Tarbell controller ports.
-
-## Command-Line Options
 
 ```
 rust-imsai-emulator <disk_image.img> [OPTIONS]
@@ -54,15 +71,27 @@ Options:
   --cmd "text"       Pre-load keyboard input for scripted testing
 ```
 
+## CP/M 2.2 Memory Map
+
+| Address   | Contents                              |
+|-----------|---------------------------------------|
+| 0x0000    | Vectors (JMP WBOOT, JMP BDOS)       |
+| 0x0100    | TPA (Transient Program Area)           |
+| 0xE400    | CCP (loaded from disk image)           |
+| 0xEC00    | BDOS (loaded from disk image)           |
+| 0xF000    | BDOS data area                         |
+| 0xFA00    | Custom BIOS (17-entry jump table)      |
+| 0xFB30    | DPH + DIRBUF + CSV + ALV               |
+
 ## Terminal Mode Controls
 
 | Key          | Action                                    |
-|-------------|-------------------------------------------|
+|------------- |-------------------------------------------|
 | Letters      | Sent as uppercase to CP/M CONIN           |
 | Enter        | Sends CR (0x0D)                           |
 | Backspace    | Sends DEL (0x7F)                          |
 | Escape       | Sends ESC (0x1B)                          |
-| Ctrl+key     | Sends control character (Ctrl+C = 0x03)   |
+| Ctrl+key     | Sends control character (Ctrl+C = 0x03)  |
 | Ctrl+]       | Exit emulator                              |
 
 ## BIOS

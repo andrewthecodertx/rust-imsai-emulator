@@ -86,6 +86,22 @@ impl SerialCard {
         &mut self.channel_b
     }
 
+    /// Poll the Channel A UART keyboard buffer and transfer one character
+    /// to the UART RX data register if ready.
+    ///
+    /// Unlike `poll_rx()`, this method does NOT re-initialize the UART
+    /// or drain TX output to the video display. Use this for custom
+    /// rendering pipelines (e.g., raylib panel) where you manage
+    /// TX output yourself via `channel_a_mut().take_output()`.
+    pub fn poll_keyboard(&mut self) {
+        if self.channel_a.is_rx_enabled() && self.keyboard.is_char_ready() {
+            let ch = self.keyboard.read_char();
+            if ch != 0 {
+                self.channel_a.inject_rx_byte(ch);
+            }
+        }
+    }
+
     /// Poll the Channel A UART for keyboard input.
     /// Transfers characters from the keyboard buffer to the UART's
     /// RX data register. Must be called periodically to simulate
