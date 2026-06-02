@@ -33,9 +33,14 @@ const SW_PADDLE_H: i32 = 18;  // visible paddle height
 const SW_PLATE_H: i32 = 4;    // base plate thickness
 
 // Button dimensions
-const BTN_W: i32 = 80;
-const BTN_H: i32 = 28;
+const BTN_W: i32 = 72;
+const BTN_H: i32 = 30;
 const BTN_GAP: i32 = 8;
+
+// Momentary button colors
+const BTN_TOP: u8 = 85;
+const BTN_FACE: u8 = 65;
+const BTN_SHADOW: u8 = 40;
 
 // Terminal dimensions
 const TERM_COLS: usize = 80;
@@ -149,8 +154,12 @@ fn main() {
     let txt_dim   = raylib::color::Color { r: 120, g: 120, b: 110, a: 255 };
     let t_fg      = raylib::color::Color { r: 0, g: 220, b: 80, a: 255 };
     let t_bg      = raylib::color::Color { r: 5, g: 12, b: 5, a: 255 };
-    let btn_bg    = raylib::color::Color { r: 70, g: 70, b: 75, a: 255 };
     let border    = raylib::color::Color { r: 100, g: 100, b: 90, a: 255 };
+    // Momentary pushbutton colors (3D raised button look)
+    let mom_face  = raylib::color::Color { r: BTN_FACE, g: BTN_FACE, b: BTN_FACE + 5, a: 255 };
+    let mom_hi    = raylib::color::Color { r: BTN_TOP, g: BTN_TOP, b: BTN_TOP + 5, a: 255 };
+    let mom_lo    = raylib::color::Color { r: BTN_SHADOW, g: BTN_SHADOW, b: BTN_SHADOW + 5, a: 255 };
+    let mom_text  = raylib::color::Color { r: 220, g: 220, b: 210, a: 255 };
 
     // Layout constants (left panel x=20, terminal x=580)
     let lp_x: i32 = 20;              // left panel left edge
@@ -182,14 +191,22 @@ fn main() {
                 }
             }
 
-            // Function buttons (matches draw at btn_y = 470)
-            let btn_actions = [PanelSwitch::RunStop, PanelSwitch::SingleStep,
-                               PanelSwitch::Examine, PanelSwitch::Deposit,
-                               PanelSwitch::ExamineNext, PanelSwitch::DepositNext];
-            let btn_y_f: f32 = 470.0;
-            for (i, action) in btn_actions.iter().enumerate() {
-                let x = (lp_x + 10 + i as i32 * (BTN_W + BTN_GAP)) as f32;
-                if m.x >= x && m.x < x + BTN_W as f32 && m.y >= btn_y_f && m.y < btn_y_f + BTN_H as f32 {
+            // Function controls (matches draw at btn_y = 470)
+            // RUN/STOP is a toggle switch at runstop_x
+            let runstop_x = lp_x + 10 + 6;
+            if m.x >= runstop_x as f32 && m.x < (runstop_x + SW_W) as f32
+                && m.y >= 470.0 && m.y < (470 + BTN_H) as f32 {
+                emu.panel.press_switch(PanelSwitch::RunStop);
+            }
+
+            // Momentary buttons (STEP, EXAM, DEP, EX NXT, DEP NXT)
+            let mom_start_x = (lp_x + 10 + SW_W + 16) as f32;
+            let mom_actions = [PanelSwitch::SingleStep, PanelSwitch::Examine,
+                               PanelSwitch::Deposit, PanelSwitch::ExamineNext,
+                               PanelSwitch::DepositNext];
+            for (i, action) in mom_actions.iter().enumerate() {
+                let x = mom_start_x + i as f32 * (BTN_W + BTN_GAP) as f32;
+                if m.x >= x && m.x < x + BTN_W as f32 && m.y >= 470.0 && m.y < 470.0 + BTN_H as f32 {
                     if *action == PanelSwitch::SingleStep {
                         step_pending = true;
                     } else {
@@ -349,17 +366,34 @@ fn main() {
                 sw_tip_on, sw_tip_off);
         }
 
-        // === Function buttons (row at y=470) ===
+        // === Function controls (row at y=470) ===
+        // RUN/STOP is a latching toggle (like address/data switches but red).
+        // The other 5 are momentary push-buttons (press and release).
         let btn_y: i32 = 470;
-        let btn_labels = ["RUN/STOP", "STEP", "EXAM", "DEPOSIT", "EX NXT", "DEP NXT"];
-        d.draw_text("FUNCTION", lp_x + 10, btn_y - 16, 12, txt_dim);
-        for (i, lbl) in btn_labels.iter().enumerate() {
-            let x = lp_x + 10 + i as i32 * (BTN_W + BTN_GAP);
-            d.draw_rectangle(x, btn_y, BTN_W, BTN_H, btn_bg);
+        d.draw_text("CONTROLS", lp_x + 10, btn_y - 16, 12, txt_dim);
+
+        // RUN/STOP toggle switch (red paddle, shows current RUN/STOP state)
+        let runstop_x = lp_x + 10;
+        d.draw_text("RUN/STOP", runstop_x, btn_y + BTN_H as i32 + 2, 9, txt_dim);
+        draw_toggle_switch(&mut d, runstop_x + 6, btn_y, SW_W, BTN_H, 14, 4,
+            emu.panel.is_running(), sw_slot, sw_slot_rim, sw_paddle, sw_paddle_hi, sw_paddle_lo,
+            raylib::color::Color { r: 255, g: 50, b: 50, a: 255 },  // red tip ON
+            sw_tip_off);
+
+        // Momentary push-buttons (STEP, EXAM, DEPOSIT, EX NXT, DEP NXT)
+        let mom_labels = ["STEP", "EXAM", "DEP", "EX NXT", "DEP NXT"];
+        let mom_start_x = lp_x + 10 + SW_W + 16;
+        for (i, lbl) in mom_labels.iter().enumerate() {
+            let x = mom_start_x + i as i32 * (BTN_W + BTN_GAP);
+            // 3D raised button: top edge lighter, bottom edge darker
+            d.draw_rectangle(x, btn_y, BTN_W, BTN_H, mom_hi);     // top highlight
+            d.draw_rectangle(x, btn_y + 2, BTN_W, BTN_H, mom_face); // face
+            d.draw_rectangle(x, btn_y + BTN_H - 2, BTN_W, 2, mom_lo); // shadow bottom
+            d.draw_rectangle(x + BTN_W - 2, btn_y, 2, BTN_H, mom_lo);  // shadow right
             d.draw_rectangle_lines(x, btn_y, BTN_W, BTN_H, border);
-            // Center text in button
-            let text_w = d.measure_text(lbl, 10);
-            d.draw_text(lbl, x + (BTN_W - text_w) / 2, btn_y + 9, 10, txt);
+            // Centered label
+            let text_w = d.measure_text(lbl, 9);
+            d.draw_text(lbl, x + (BTN_W - text_w) / 2, btn_y + 10, 9, mom_text);
         }
 
         // === Terminal display (right panel) ===
