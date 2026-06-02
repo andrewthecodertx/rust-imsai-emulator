@@ -89,10 +89,10 @@ impl SerialCard {
     /// Poll the Channel A UART keyboard buffer and transfer one character
     /// to the UART RX data register if ready.
     ///
-    /// Unlike `poll_rx()`, this method does NOT re-initialize the UART
-    /// or drain TX output to the video display. Use this for custom
-    /// rendering pipelines (e.g., raylib panel) where you manage
-    /// TX output yourself via `channel_a_mut().take_output()`.
+    /// Unlike `poll_rx()`, this method does NOT drain TX output or
+    /// consume the output buffer. Use this for custom rendering pipelines
+    /// (e.g., raylib panel) where you manage TX output yourself via
+    /// `channel_a_mut().take_output()`.
     pub fn poll_keyboard(&mut self) {
         if self.channel_a.is_rx_enabled() && self.keyboard.is_char_ready() {
             let ch = self.keyboard.read_char();
@@ -102,31 +102,53 @@ impl SerialCard {
         }
     }
 
-    /// Poll the Channel A UART for keyboard input.
-    /// Transfers characters from the keyboard buffer to the UART's
-    /// RX data register. Must be called periodically to simulate
-    /// serial data arrival from the terminal.
-    pub fn poll_rx(&mut self) {
-        // Transfer keyboard chars to the 8251A UART
+    /// Service the Channel A UART during CPU I/O operations.
+    ///
+    /// This method:
+    /// 1. Injects keyboard input into the RX buffer (without reprogramming)
+    /// 2. Drains the TX shift register and restores TxRDY so the CPU can
+    ///    poll for TX readiness without hanging
+    /// 3. Does NOT consume the output buffer (the host calls `take_output()`)
+    ///
+    /// Called from the I/O read path so TxRDY polling works during execution.
+    pub fn service_uart(&mut self) {
+        // Inject keyboard input without reprogramming the UART
         if self.channel_a.is_rx_enabled() && self.keyboard.is_char_ready() {
             let ch = self.keyboard.read_char();
-            // Directly inject the character into the UART RX buffer
-            // This bypasses the normal MODE/COMMAND programming sequence,
-            // simulating immediate serial data arrival on the line.
-            // The UART's poll_rx would normally do this, but our UART
-            // has its own keyboard. Instead, we write directly to the
-            // data register path.
-            self.channel_a_mut().write_control(0x4E); // Mode: 8N1 X16
-            self.channel_a_mut().write_control(0x05); // Command: TX+RX enable
-            // Inject the byte directly
             if ch != 0 {
                 self.channel_a.inject_rx_byte(ch);
             }
         }
-        // Also drain any pending TX output to the video display
+        // Drain TX shift register and restore TxRDY/TxEMPTY flags.
+        // This simulates the byte being transmitted on the serial line,
+        // which clears the TX buffer in the real chip and makes TxRDY
+        // available for the next OUT instruction.
+        self.channel_a.drain_tx();
+        self.channel_a.update_tx();
+    }
+
+    /// Poll the Channel A UART for keyboard input and drain TX output
+    /// to the video display.
+    ///
+    /// Use this for the terminal-mode emulator (main.rs) that uses the
+    /// VideoDisplay. For the panel (raylib), use `poll_keyboard()` and
+    /// `take_output()` instead.
+    pub fn poll_rx(&mut self) {
+        // Transfer keyboard chars to the 8251A UART RX buffer
+        if self.channel_a.is_rx_enabled() && self.keyboard.is_char_ready() {
+            let ch = self.keyboard.read_char();
+            // Inject directly without reprogramming the UART.
+            if ch != 0 {
+                self.channel_a.inject_rx_byte(ch);
+            }
+        }
+        // Drain any pending TX output to the video display
         let output = self.channel_a.take_output();
         for &byte in &output {
             self.video.write_char(byte);
+            if self.video.auto_render {
+                self.video.render();
+            }
         }
         // Update TX state
         self.channel_a.drain_tx();
@@ -163,9 +185,11 @@ impl Default for SerialCard {
 
 impl super::Card for SerialCard {
     fn io_read(&mut self, port: u8) -> u8 {
-        // Poll keyboard input before any read from the console ports
+        // Service the UART on every read from console ports.
+        // This drains the TX buffer (restoring TxRDY) and handles
+        // keyboard input, but does NOT consume the output buffer.
         if matches!(port, 0x00 | 0x01 | 0x79) {
-            self.poll_rx();
+            self.service_uart();
         }
 
         match port {
