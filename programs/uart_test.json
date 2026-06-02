@@ -1,8 +1,13 @@
 {
   "name": "UART Test (Fast Load)",
-  "description": "Same as uart-test but loads all bytes at once instead of toggling each one. Proves CPU, bus, and serial I/O all work.",
+  "description": "Proves CPU, bus, and serial I/O all work.",
   "steps": [
-    { "action": "load", "address": "0000", "data": "3E 4E D3 01 3E 05 D3 01 3E 41 D3 00 C3 0A 00" },
+    {
+      "action": "load",
+      "address": "0000",
+      "data": "3E 4E D3 01 3E 05 D3 01 3E 41 D3 00 C3 0A 00"
+    },
     { "action": "run", "address": "0000" }
   ]
 }
+
