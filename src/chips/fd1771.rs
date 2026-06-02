@@ -315,11 +315,9 @@ impl Fd1771 {
                 let value = self.sector_buffer[self.buffer_pos];
                 self.buffer_pos += 1;
 
-                // Clear DRQ after byte is read
                 self.status_reg &= !S_DRQ;
 
                 if self.buffer_pos >= SECTOR_SIZE {
-                    // All bytes read, operation complete
                     self.state = FdcState::Complete;
                     self.status_reg &= !S_BUSY;
                 }
@@ -342,11 +340,9 @@ impl Fd1771 {
                 self.sector_buffer[self.buffer_pos] = value;
                 self.buffer_pos += 1;
 
-                // Clear DRQ after byte is written
                 self.status_reg &= !S_DRQ;
 
                 if self.buffer_pos >= SECTOR_SIZE {
-                    // All bytes written, commit to disk
                     self.commit_write();
                 }
             } else {

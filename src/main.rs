@@ -194,7 +194,6 @@ fn main() {
     let mut emu = rust_imsai_emulator::Imsai8080::new();
     let mut start_pc: Option<u16> = None;
 
-    // Determine what to load
     if let Some(ref path) = program_arg {
         // Load a front panel program (.json)
         let pbuf = PathBuf::from(path);
