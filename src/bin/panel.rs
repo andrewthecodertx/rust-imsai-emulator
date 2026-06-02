@@ -153,6 +153,17 @@ const LOGO_FONT_PATHS: &[&str] = &[
     "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
 ];
 
+/// Monospace font for CRT terminal and picker overlays.
+const MONO_FONT_PATHS: &[&str] = &[
+    "/usr/share/fonts/liberation/LiberationMono-Regular.ttf",
+    "/usr/share/fonts/TTF/LiberationMono-Regular.ttf",
+    "/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf",
+    "/usr/share/fonts/TTF/DejaVuSansMNerdFontMono-Regular.ttf",
+    "/usr/share/fonts/TTF/DejaVuSansMono.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+    "/usr/share/fonts/TTF/InconsolataNerdFontMono-Regular.ttf",
+];
+
 // Window size
 //
 // The window is resizable. The panel layout is authored at REF_W x REF_H
@@ -294,6 +305,15 @@ fn main() {
         .iter()
         .find_map(|p| rl.load_font_ex(&thread, p, 30, None).ok());
     if let Some(ref f) = ui_font {
+        f.texture()
+            .set_texture_filter(&thread, TextureFilter::TEXTURE_FILTER_BILINEAR);
+    }
+    // Monospace TTF for the CRT terminal and picker overlays. Loaded at
+    // 2x render size for crisp downscaling. Falls back to bitmap if absent.
+    let term_font = MONO_FONT_PATHS
+        .iter()
+        .find_map(|p| rl.load_font_ex(&thread, p, 32, None).ok());
+    if let Some(ref f) = term_font {
         f.texture()
             .set_texture_filter(&thread, TextureFilter::TEXTURE_FILTER_BILINEAR);
     }
@@ -914,6 +934,7 @@ fn main() {
         }
 
         let uf = ui_font.as_ref();
+        let tf = term_font.as_ref();
 
         // ---------------------------------------------------------------
         // Row 1: PROGRAMMED OUTPUT (left byte block) -- not modeled, off.
@@ -1145,69 +1166,79 @@ fn main() {
         for scan_y in (term_y..term_y + term_h).step_by(4) {
             d.draw_rectangle(term_x, scan_y, term_w, 1, scanline_col);
         }
-        d.draw_text(
-            "CONSOLE",
-            term_x + 4,
-            term_y + 2,
-            12,
-            raylib::color::Color {
-                r: 30,
-                g: 80,
-                b: 30,
-                a: 180,
-            },
-        );
+        // CRT label
+        let con_color = raylib::color::Color { r: 30, g: 80, b: 30, a: 180 };
+        if let Some(f) = tf {
+            d.draw_text_ex(f, "CONSOLE",
+                raylib::math::Vector2::new((term_x + 4) as f32, (term_y + 2) as f32),
+                13.0, 1.0, con_color);
+        } else {
+            d.draw_text("CONSOLE", term_x + 4, term_y + 2, 12, con_color);
+        }
 
         let term_text_y = term_y + 18;
         let term_text_x = term_x + 6;
+        // Measure actual character width from the monospace font (or fall back to constant)
+        let (char_w, char_h) = if let Some(f) = tf {
+            let m = f.measure_text("M", TERM_FONT_SIZE as f32, 0.0);
+            (m.x as i32, TERM_CHAR_H)
+        } else {
+            (TERM_CHAR_W, TERM_CHAR_H)
+        };
         for row in 0..TERM_ROWS {
-            let row_top = term_text_y + row as i32 * TERM_CHAR_H;
-            if row_top + TERM_CHAR_H > term_y + term_h {
+            let row_top = term_text_y + row as i32 * char_h;
+            if row_top + char_h > term_y + term_h {
                 break;
             }
-            for col in 0..TERM_COLS {
-                let ch = term[row][col];
-                // Only render printable ASCII; suppress high bytes that
-                // would map to garbled Unicode glyphs.
-                if ch >= 0x20 && ch <= 0x7E {
-                    d.draw_text(
-                        &format!("{}", ch as char),
-                        term_text_x + col as i32 * TERM_CHAR_W,
-                        row_top,
-                        TERM_FONT_SIZE,
-                        t_fg,
-                    );
-                }
+            // Build the row string (printable ASCII only, replace others with space)
+            let row_str: String = (0..TERM_COLS)
+                .map(|col| {
+                    let ch = term[row][col];
+                    if ch >= 0x20 && ch <= 0x7E { ch as char } else { ' ' }
+                })
+                .collect();
+            if let Some(f) = tf {
+                d.draw_text_ex(
+                    f,
+                    &row_str,
+                    raylib::math::Vector2::new(term_text_x as f32, row_top as f32),
+                    TERM_FONT_SIZE as f32,
+                    0.0,
+                    t_fg,
+                );
+            } else {
+                d.draw_text(&row_str, term_text_x, row_top, TERM_FONT_SIZE, t_fg);
             }
         }
 
         // === I/O log (right side of terminal area) ===
-        let iolog_x = term_x + TERM_COLS as i32 * TERM_CHAR_W + 20;
-        if iolog_x + 140 < term_x + term_w {
-            d.draw_text(
-                "I/O LOG",
-                iolog_x,
-                term_y + 4,
-                10,
-                raylib::color::Color {
-                    r: 30,
-                    g: 80,
-                    b: 30,
-                    a: 180,
-                },
-            );
+        let iolog_x = term_x + TERM_COLS as i32 * char_w + 20;
+        if iolog_x + 160 < term_x + term_w {
+            let log_label_size = 12.0_f32;
+            let log_entry_size = 11.0_f32;
+            let log_line_h = if tf.is_some() { 15 } else { 13 };
+            if let Some(f) = tf {
+                d.draw_text_ex(f, "I/O LOG",
+                    raylib::math::Vector2::new(iolog_x as f32, (term_y + 4) as f32),
+                    log_label_size, 1.0,
+                    raylib::color::Color { r: 30, g: 80, b: 30, a: 180 });
+            } else {
+                d.draw_text("I/O LOG", iolog_x, term_y + 4, 10,
+                    raylib::color::Color { r: 30, g: 80, b: 30, a: 180 });
+            }
             let io_log = emu.panel.io_log();
             let log_start = io_log.len().saturating_sub(10);
             for (i, ev) in io_log[log_start..].iter().enumerate() {
                 let dir = if ev.is_write { "OUT" } else { "IN " };
                 let kind = if ev.is_io { "IO" } else { "MEM" };
-                d.draw_text(
-                    &format!("{} {:04X} {:02X} {}", dir, ev.address, ev.data, kind),
-                    iolog_x,
-                    term_y + 18 + i as i32 * 13,
-                    9,
-                    txt_dim,
-                );
+                let text = format!("{} {:04X} {:02X} {}", dir, ev.address, ev.data, kind);
+                if let Some(f) = tf {
+                    d.draw_text_ex(f, &text,
+                        raylib::math::Vector2::new(iolog_x as f32, (term_y + 18 + i as i32 * log_line_h) as f32),
+                        log_entry_size, 1.0, txt_dim);
+                } else {
+                    d.draw_text(&text, iolog_x, term_y + 18 + i as i32 * 13, 9, txt_dim);
+                }
             }
         }
 
@@ -1242,23 +1273,21 @@ fn main() {
                     scroll,
                     selected,
                 } => {
-                    d.draw_text(
-                        "LOAD PROGRAM",
-                        overlay_x + 10,
-                        overlay_y + 8,
-                        16,
-                        txt_bright,
-                    );
-                    d.draw_text(
-                        "Up/Down = navigate    Enter = load    Esc = cancel",
-                        overlay_x + 10,
-                        overlay_y + 28,
-                        10,
-                        txt_dim,
-                    );
-                    let list_y = overlay_y + 50;
-                    let list_h = overlay_h - 68;
-                    let row_h: i32 = 36;
+                    if let Some(f) = tf {
+                        d.draw_text_ex(f, "LOAD PROGRAM",
+                            raylib::math::Vector2::new((overlay_x + 10) as f32, (overlay_y + 8) as f32),
+                            18.0, 1.0, txt_bright);
+                        d.draw_text_ex(f, "Up/Down navigate   Enter load   Esc cancel",
+                            raylib::math::Vector2::new((overlay_x + 10) as f32, (overlay_y + 30) as f32),
+                            12.0, 1.0, txt_dim);
+                    } else {
+                        d.draw_text("LOAD PROGRAM", overlay_x + 10, overlay_y + 8, 16, txt_bright);
+                        d.draw_text("Up/Down = navigate    Enter = load    Esc = cancel",
+                            overlay_x + 10, overlay_y + 28, 10, txt_dim);
+                    }
+                    let list_y = overlay_y + 52;
+                    let list_h = overlay_h - 72;
+                    let row_h: i32 = 40;
                     let visible_rows = (list_h / row_h) as usize;
                     d.draw_rectangle(
                         overlay_x + 5,
@@ -1294,56 +1323,75 @@ fn main() {
                                 },
                             );
                         }
-                        d.draw_text(
-                            &entry.name,
-                            overlay_x + 15,
-                            row_y + 4,
-                            15,
-                            if is_sel { led_on } else { txt_bright },
-                        );
-                        let desc_max_chars = ((overlay_w - 30) / 6) as usize;
+                        let name_size = if is_sel { 16.0 } else { 14.0 };
+                        if let Some(fnt) = tf {
+                            d.draw_text_ex(fnt, &entry.name,
+                                raylib::math::Vector2::new((overlay_x + 15) as f32, (row_y + 4) as f32),
+                                name_size, 1.0, if is_sel { led_on } else { txt_bright });
+                        } else {
+                            d.draw_text(&entry.name, overlay_x + 15, row_y + 4,
+                                if is_sel { 15 } else { 14 },
+                                if is_sel { led_on } else { txt_bright });
+                        }
+                        let desc_max_chars = ((overlay_w - 30) / 7) as usize;
                         let desc: String = entry.description.chars().take(desc_max_chars).collect();
-                        d.draw_text(&desc, overlay_x + 15, row_y + 20, 10, txt_dim);
+                        if let Some(fnt) = tf {
+                            d.draw_text_ex(fnt, &desc,
+                                raylib::math::Vector2::new((overlay_x + 15) as f32, (row_y + 22) as f32),
+                                12.0, 1.0, txt_dim);
+                        } else {
+                            d.draw_text(&desc, overlay_x + 15, row_y + 20, 10, txt_dim);
+                        }
                     }
                     if *scroll > 0 {
-                        d.draw_text("  ^ more above ^", overlay_x + 10, list_y - 14, 9, txt_dim);
+                        if let Some(f) = tf {
+                            d.draw_text_ex(f, "  ^ more above ^",
+                                raylib::math::Vector2::new((overlay_x + 10) as f32, (list_y - 16) as f32),
+                                11.0, 1.0, txt_dim);
+                        } else {
+                            d.draw_text("  ^ more above ^", overlay_x + 10, list_y - 14, 9, txt_dim);
+                        }
                     }
                     if (*scroll as usize + visible_rows) < entries.len() {
-                        d.draw_text(
-                            "  v more below v",
-                            overlay_x + 10,
-                            list_y + list_h + 2,
-                            9,
-                            txt_dim,
-                        );
+                        if let Some(f) = tf {
+                            d.draw_text_ex(f, "  v more below v",
+                                raylib::math::Vector2::new((overlay_x + 10) as f32, (list_y + list_h + 2) as f32),
+                                11.0, 1.0, txt_dim);
+                        } else {
+                            d.draw_text("  v more below v", overlay_x + 10, list_y + list_h + 2, 9, txt_dim);
+                        }
                     }
-                    d.draw_text(
-                        &format!("{} / {} entries", selected + 1, entries.len()),
-                        overlay_x + 10,
-                        overlay_y + overlay_h - 18,
-                        10,
-                        txt_dim,
-                    );
+                    let counter = format!("{} / {} entries", selected + 1, entries.len());
+                    if let Some(f) = tf {
+                        d.draw_text_ex(f, &counter,
+                            raylib::math::Vector2::new((overlay_x + 10) as f32, (overlay_y + overlay_h - 18) as f32),
+                            12.0, 1.0, txt_dim);
+                    } else {
+                        d.draw_text(&counter, overlay_x + 10, overlay_y + overlay_h - 18, 10, txt_dim);
+                    }
                 }
                 PickerState::Save {
                     filename,
                     cursor_blink,
                 } => {
-                    d.draw_text(
-                        "SAVE PROGRAM (Enter = save, Esc = cancel)",
-                        overlay_x + 10,
-                        overlay_y + 8,
-                        14,
-                        txt_bright,
-                    );
-                    d.draw_text(
-                        "Saved to programs/<name>.json",
-                        overlay_x + 10,
-                        overlay_y + 28,
-                        10,
-                        txt_dim,
-                    );
-                    d.draw_text("Filename:", overlay_x + 10, overlay_y + 56, 14, txt);
+                    if let Some(f) = tf {
+                        d.draw_text_ex(f, "SAVE PROGRAM (Enter = save, Esc = cancel)",
+                            raylib::math::Vector2::new((overlay_x + 10) as f32, (overlay_y + 8) as f32),
+                            16.0, 1.0, txt_bright);
+                        d.draw_text_ex(f, "Saved to programs/<name>.json",
+                            raylib::math::Vector2::new((overlay_x + 10) as f32, (overlay_y + 30) as f32),
+                            12.0, 1.0, txt_dim);
+                    } else {
+                        d.draw_text("SAVE PROGRAM (Enter = save, Esc = cancel)", overlay_x + 10, overlay_y + 8, 14, txt_bright);
+                        d.draw_text("Saved to programs/<name>.json", overlay_x + 10, overlay_y + 28, 10, txt_dim);
+                    }
+                    if let Some(f) = tf {
+                        d.draw_text_ex(f, "Filename:",
+                            raylib::math::Vector2::new((overlay_x + 10) as f32, (overlay_y + 56) as f32),
+                            16.0, 1.0, txt);
+                    } else {
+                        d.draw_text("Filename:", overlay_x + 10, overlay_y + 56, 14, txt);
+                    }
                     let input_y = overlay_y + 76;
                     d.draw_rectangle(
                         overlay_x + 10,
@@ -1363,14 +1411,21 @@ fn main() {
                     } else {
                         format!("{}.json ", filename)
                     };
-                    d.draw_text(&display_name, overlay_x + 16, input_y + 6, 16, led_on);
-                    d.draw_text(
-                        "Saves 256 bytes from address switches position",
-                        overlay_x + 10,
-                        overlay_y + 120,
-                        10,
-                        txt_dim,
-                    );
+                    if let Some(f) = tf {
+                        d.draw_text_ex(f, &display_name,
+                            raylib::math::Vector2::new((overlay_x + 16) as f32, (input_y + 6) as f32),
+                            16.0, 1.0, led_on);
+                    } else {
+                        d.draw_text(&display_name, overlay_x + 16, input_y + 6, 16, led_on);
+                    }
+                    if let Some(f) = tf {
+                        d.draw_text_ex(f, "Saves 256 bytes from address switches position",
+                            raylib::math::Vector2::new((overlay_x + 10) as f32, (overlay_y + 120) as f32),
+                            12.0, 1.0, txt_dim);
+                    } else {
+                        d.draw_text("Saves 256 bytes from address switches position",
+                            overlay_x + 10, overlay_y + 120, 10, txt_dim);
+                    }
                     let addr_val_display: u16 = addr_sw
                         .iter()
                         .enumerate()
