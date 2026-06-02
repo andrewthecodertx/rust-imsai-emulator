@@ -76,7 +76,7 @@ The `load` action is a shortcut that writes bytes via `load_program()` instead o
 
 ```bash
 # Run the UART test program
-cargo run --bin imsai-gui -- --program programs/uart_test.json
+cargo run --bin imsai-gui -- --program programs/uart-test.json
 
 # Run the Hello World program
 cargo run --bin imsai-gui -- --program programs/hello-world.json

@@ -2,6 +2,10 @@
 name = "rust-imsai-emulator"
 version = "0.1.0"
 edition = "2021"
+# Two binaries (imsai-cli, imsai-gui). Without this, a bare `cargo run`
+# errors with "could not determine which binary to run". Default to the
+# terminal CLI; use `cargo run --bin imsai-gui` for the raylib front panel.
+default-run = "imsai-cli"
 
 [lib]
 name = "rust_imsai_emulator"

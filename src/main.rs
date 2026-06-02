@@ -381,116 +381,6 @@ fn run_diag(emu: &mut rust_imsai_emulator::Imsai8080, max: u64) {
     }
 }
 
-/// Local command mode: pauses CPU, lets user load programs/disks, then resumes.
-fn handle_command_mode(
-    emu: &mut rust_imsai_emulator::Imsai8080,
-    stdout: &mut io::Stdout,
-    program_name: &mut String,
-) {
-    // Leave alternate screen so we can type commands normally
-    stdout.execute(LeaveAlternateScreen).ok();
-    disable_raw_mode().ok();
-
-    println!("\r\n--- IMSAI Command Mode (Ctrl+K to re-enter, Ctrl+] to exit emulator) ---");
-    println!("Commands: load <file> [addr], mount <disk.img>, program <file.json>, go, reset, quit");
-    println!("CPU {} | PC={:04X} SP={:04X} A={:02X}", 
-        if emu.cpu.halted { "HALT" } else { "STOPPED" }, emu.cpu.pc, emu.cpu.sp, emu.cpu.a);
-
-    loop {
-        print!("> ");
-        stdout.flush().ok();
-
-        let mut input = String::new();
-        if io::stdin().read_line(&mut input).is_err() {
-            break;
-        }
-        let input = input.trim();
-        if input.is_empty() {
-            continue;
-        }
-
-        let parts: Vec<&str> = input.splitn(3, ' ').collect();
-        match parts[0].to_lowercase().as_str() {
-            "load" => {
-                let path = parts.get(1);
-                let addr_str = parts.get(2);
-                if path.is_none() {
-                    println!("Usage: load <file> [addr]");
-                    continue;
-                }
-                let path = path.unwrap();
-                let addr: u16 = addr_str
-                    .and_then(|s| u16::from_str_radix(s.trim_start_matches("0x"), 16).ok())
-                    .unwrap_or(0);
-                match std::fs::read(path) {
-                    Ok(data) => {
-                        emu.load_program(addr, &data);
-                        emu.cpu.pc = addr;
-                        *program_name = format!("{} @ {:04X}", path, addr);
-                        println!("Loaded {} bytes at 0x{:04X}, PC set to 0x{:04X}", data.len(), addr, addr);
-                    }
-                    Err(e) => println!("Error loading '{}': {}", path, e),
-                }
-            }
-            "mount" => {
-                let path = parts.get(1);
-                if path.is_none() {
-                    println!("Usage: mount <disk.img>");
-                    continue;
-                }
-                match emu.bus.card_mut::<TarbellCard>().expect("Tarbell card").insert_disk(0, *path.unwrap()) {
-                    Ok(()) => println!("Disk mounted in drive A: {}", path.unwrap()),
-                    Err(e) => println!("Error mounting '{}': {}", path.unwrap(), e),
-                }
-            }
-            "program" => {
-                let path = parts.get(1);
-                if path.is_none() {
-                    println!("Usage: program <file.json>");
-                    continue;
-                }
-                let pbuf = PathBuf::from(*path.unwrap());
-                match load_program_file(&pbuf) {
-                    Ok(prog) => {
-                        let start = find_program_start(&prog).unwrap_or(0);
-                        execute_panel_program(emu, &prog);
-                        emu.cpu.pc = start;
-                        *program_name = prog.name.clone();
-                        println!("Loaded program: {} (PC=0x{:04X})", prog.name, start);
-                    }
-                    Err(e) => println!("Error: {}", e),
-                }
-            }
-            "go" | "run" => {
-                emu.cpu.halted = false;
-                println!("Resuming execution...");
-                break;
-            }
-            "reset" => {
-                *emu = rust_imsai_emulator::Imsai8080::new();
-                *program_name = String::new();
-                println!("Cold reset. Memory cleared, CPU at 0x0000.");
-            }
-            "quit" | "exit" => {
-                println!("Exiting...");
-                // Save memory and exit
-                let mem_path = std::path::Path::new("imsai_memory.json");
-                match save_memory_to_file(&emu.bus.memory().ram, mem_path) {
-                    Ok(()) => eprintln!("Memory saved to {}", mem_path.display()),
-                    Err(e) => eprintln!("Warning: failed to save {}: {}", mem_path.display(), e),
-                }
-                std::process::exit(0);
-            }
-            _ => println!("Unknown command. Type: load, mount, program, go, reset, quit"),
-        }
-    }
-
-    // Return to alternate screen for terminal mode
-    enable_raw_mode().ok();
-    stdout.execute(EnterAlternateScreen).ok();
-    print!("\r\nIMSAI 8080 Terminal\r\n---\r\n");
-    stdout.flush().ok();
-}
 
 /// Helper: save memory to imsai_memory.json
 fn save_memory(emu: &mut rust_imsai_emulator::Imsai8080) {
@@ -514,11 +404,14 @@ fn run_terminal(emu: &mut rust_imsai_emulator::Imsai8080) {
 
     let mut stdout = io::stdout();
     stdout.execute(EnterAlternateScreen).expect("Failed to enter alternate screen");
+    // Clear the alternate screen and home the cursor so no stale content
+    // (or rows below our compact panel) lingers.
+    print!("\x1B[2J\x1B[H");
     stdout.flush().ok();
 
     // If no program loaded, enter command mode immediately
     if emu.bus.mem_read(0x0000) == 0xFF && emu.cpu.pc == 0x0000 {
-        handle_command_mode(emu, &mut stdout, &mut program_name);
+        run_command_modal(emu, &mut stdout, &mut program_name);
         if emu.bus.mem_read(0x0000) == 0xFF && emu.cpu.pc == 0x0000 {
             println!("\r\nNo program loaded. Use --load, --program, or Ctrl+K to load one.");
             stdout.execute(LeaveAlternateScreen).ok();
@@ -533,80 +426,64 @@ fn run_terminal(emu: &mut rust_imsai_emulator::Imsai8080) {
     let mut instruction_count: u64 = 0;
     let mut idle_count: u64 = 0;
     let mut last_display: String = String::new();
+    // RUN/STOP state, toggled by F5 (mirrors the GUI's F5 run/stop). The CLI
+    // auto-runs a loaded program, so we start RUNNING.
+    let mut running = true;
     let start_time = Instant::now();
 
     loop {
-        // Run a batch of CPU instructions
-        for _ in 0..batch_size {
-            emu.step();
-            instruction_count += 1;
-            emu.bus.serial().service_uart();
+        // Run a batch of CPU instructions, but only while in RUN state and the
+        // CPU hasn't executed HLT.
+        if running && !emu.cpu.halted {
+            for _ in 0..batch_size {
+                emu.step();
+                instruction_count += 1;
+                // poll_rx (not service_uart): inject keyboard input AND drain
+                // the UART TX output buffer into the VideoDisplay so it
+                // actually shows on the CRT. service_uart only manages TX
+                // flags and leaves the output buffered, which left the screen
+                // blank.
+                emu.bus.serial().poll_rx();
 
-            if emu.cpu.halted {
-                break;
+                if emu.cpu.halted {
+                    break;
+                }
             }
         }
 
-        // Render the display after each batch (or when halted)
+        // Render the display after each batch (or when halted). The command
+        // modal is a synchronous blocking call, so the main loop is never
+        // here while it owns the screen.
         let display = emu.bus.console().video().get_display_string();
         if display != last_display || emu.cpu.halted {
             last_display = display.clone();
-            let term_size = crossterm::terminal::size().unwrap_or((24, 80));
-            let term_cols = term_size.1 as usize;
-            let term_rows = term_size.0 as usize;
+            // crossterm returns (columns, rows).
+            let term_size = crossterm::terminal::size().unwrap_or((80, 24));
+            let term_cols = term_size.0 as usize;
+            let term_rows = term_size.1 as usize;
             let display_lines: Vec<&str> = display.trim_end_matches('\n').lines().collect();
 
-            // Show the bottom of the display (where action happens)
-            let visible = term_rows.saturating_sub(2); // reserve 2 for status bar
-            let skip = display_lines.len().saturating_sub(visible);
+            // The CRT is a fixed-height block (the VideoDisplay buffer, 24
+            // rows) anchored at the top. It scrolls internally, so its rows
+            // already are the visible screen -- we render them top-aligned,
+            // not "the bottom N lines". On a short terminal we clamp so the
+            // status bar still fits.
+            let crt_rows = display_lines.len().min(term_rows.saturating_sub(1));
 
-            print!("\x1B[H"); // move to top-left
-            for (_, line) in display_lines.iter().enumerate().skip(skip).take(visible) {
+            // Paint each line at an absolute row/column. We can't rely on
+            // "\n" to wrap to the next line's column 0: raw mode clears
+            // OPOST, so LF is a bare line-feed with no carriage return and
+            // the lines would staircase diagonally across the screen.
+            let mut row: u16 = 1;
+            for line in display_lines.iter().take(crt_rows) {
                 let truncated: String = line.chars().take(term_cols).collect();
-                print!("{}\x1B[K\n", truncated);
-            }
-            // Pad remaining lines
-            let used = display_lines.len().saturating_sub(skip).min(visible);
-            for _ in used..visible {
-                print!(" \x1B[K\n");
+                print!("\x1B[{};1H{}\x1B[K", row, truncated);
+                row += 1;
             }
 
-            // Status bar (inverted video)
-            let state = if emu.cpu.halted { "HALT" } else if idle_count > 3 { "IDLE" } else { "RUN " };
-            let status = format!(
-                " {} PC:{:04X} SP:{:04X} A:{:02X} B:{:02X} C:{:02X} D:{:02X} E:{:02X} H:{:02X} L:{:02X}  {}  Ctrl+K=cmd  Ctrl+]=exit ",
-                state, emu.cpu.pc, emu.cpu.sp, emu.cpu.a,
-                emu.cpu.b, emu.cpu.c, emu.cpu.d, emu.cpu.e, emu.cpu.h, emu.cpu.l,
-                program_name
-            );
-            print!("\x1B[7m{}\x1B[0m", status);
+            // Status bar (inverted video) directly below the CRT block.
+            render_bottom_row(emu, &program_name, BottomMode::Status, running, "", None);
             stdout.flush().ok();
-
-            // If halted, show message and wait for command
-            if emu.cpu.halted {
-                print!("\r\n\r\n--- CPU HALTED ---\r\nCtrl+K for commands, Ctrl+] to exit.\r\n");
-                stdout.flush().ok();
-                loop {
-                    if event::poll(std::time::Duration::from_millis(100)).unwrap_or(false) {
-                        if let Ok(ev) = event::read() {
-                            match ev {
-                                Event::Key(KeyEvent { code: KeyCode::Char(']'), modifiers: KeyModifiers::CONTROL, .. }) => {
-                                    stdout.execute(LeaveAlternateScreen).ok();
-                                    disable_raw_mode().ok();
-                                    save_memory(emu);
-                                    return;
-                                }
-                                Event::Key(KeyEvent { code: KeyCode::Char('k'), modifiers: KeyModifiers::CONTROL, .. }) => {
-                                    handle_command_mode(emu, &mut stdout, &mut program_name);
-                                    last_display.clear();
-                                    break;
-                                }
-                                _ => {}
-                            }
-                        }
-                    }
-                }
-            }
         }
 
         // Keyboard input
@@ -620,8 +497,19 @@ fn run_terminal(emu: &mut rust_imsai_emulator::Imsai8080) {
                                 emu.bus.console().type_text("\x1B");
                                 got_key = true;
                             }
-                            KeyEvent { code: KeyCode::Char(']'), modifiers: KeyModifiers::CONTROL, .. } => {
-                                print!("\r\n\r\n--- Ctrl+] pressed, exiting ---\r\n");
+                            // F5 = start/stop the computer (RUN/STOP toggle),
+                            // matching the GUI's F5. Freezes/resumes the CPU in
+                            // place; force a repaint so the status bar updates.
+                            KeyEvent { code: KeyCode::F(5), .. } => {
+                                running = !running;
+                                last_display.clear();
+                                got_key = true;
+                            }
+                            // Ctrl+D = graceful shutdown (save memory, restore
+                            // terminal). crossterm delivers Ctrl+D as
+                            // Char('d')+CONTROL.
+                            KeyEvent { code: KeyCode::Char('d'), modifiers: KeyModifiers::CONTROL, .. } => {
+                                print!("\r\n\r\n--- Ctrl+D pressed, shutting down ---\r\n");
                                 stdout.flush().ok();
                                 stdout.execute(LeaveAlternateScreen).ok();
                                 disable_raw_mode().ok();
@@ -631,7 +519,11 @@ fn run_terminal(emu: &mut rust_imsai_emulator::Imsai8080) {
                                 return;
                             }
                             KeyEvent { code: KeyCode::Char('k'), modifiers: KeyModifiers::CONTROL, .. } => {
-                                handle_command_mode(emu, &mut stdout, &mut program_name);
+                                // A run-type command (load/program/go) resumes
+                                // execution even if we were stopped (F5) before.
+                                if run_command_modal(emu, &mut stdout, &mut program_name) {
+                                    running = true;
+                                }
                                 last_display.clear();
                                 got_key = true;
                             }
@@ -675,10 +567,362 @@ fn run_terminal(emu: &mut rust_imsai_emulator::Imsai8080) {
 
         if idle_count > 3 {
             std::thread::sleep(idle_sleep);
-            emu.bus.serial().service_uart();
+            emu.bus.serial().poll_rx();
         }
     }
 }
+/// Terminal row where the status bar / command prompt is anchored: the very
+/// bottom row of the terminal. The CRT block is painted at the top; the status
+/// line lives at the bottom (standard TUI layout), with any space between left
+/// blank.
+fn status_anchor_row(term_rows: u16) -> u16 {
+    term_rows.max(1)
+}
+
+/// Render the status/prompt area of the TUI. `mode` picks what's shown:
+/// - `BottomMode::Status` — the normal inverted-video status bar.
+/// - `BottomMode::Prompt` — a `> ` prompt with the in-progress command.
+///
+/// Both anchor on the row directly below the CRT block (see
+/// `status_anchor_row`) rather than the absolute bottom of the terminal, so
+/// the panel stays compact regardless of how tall the terminal window is.
+fn render_bottom_row(
+    emu: &rust_imsai_emulator::Imsai8080,
+    program_name: &str,
+    mode: BottomMode,
+    running: bool,
+    prompt_buf: &str,
+    last_message: Option<&str>,
+) {
+    // crossterm returns (columns, rows).
+    let term_size = crossterm::terminal::size().unwrap_or((80, 24));
+    let term_cols = term_size.0 as usize;
+    let anchor = status_anchor_row(term_size.1);
+
+    match mode {
+        BottomMode::Status => {
+            // HALT (executed HLT) > STOP (F5 paused) > RUN.
+            let state = if emu.cpu.halted {
+                "HALT"
+            } else if running {
+                "RUN "
+            } else {
+                "STOP"
+            };
+            let status = format!(
+                " {} PC:{:04X} SP:{:04X} A:{:02X} B:{:02X} C:{:02X} D:{:02X} E:{:02X} H:{:02X} L:{:02X}  {}  F5=run/stop  Ctrl+K=cmd  Ctrl+D=exit ",
+                state,
+                emu.cpu.pc, emu.cpu.sp, emu.cpu.a,
+                emu.cpu.b, emu.cpu.c, emu.cpu.d, emu.cpu.e, emu.cpu.h, emu.cpu.l,
+                program_name
+            );
+            let truncated: String = status.chars().take(term_cols).collect();
+            print!("\x1B[{};1H\x1B[2K\x1B[7m{}\x1B[0m", anchor, truncated);
+        }
+        BottomMode::Prompt => {
+            // The prompt sits on the anchor row; the result message (if any)
+            // goes on the row directly above it. On a 24-row terminal that
+            // message row is the last CRT row -- fine, it gets repainted when
+            // the modal closes (the caller clears last_display).
+            let prompt_row = anchor;
+            let message_row = anchor.saturating_sub(1).max(1);
+            if let Some(msg) = last_message {
+                let truncated: String = msg.chars().take(term_cols).collect();
+                print!("\x1B[{};1H\x1B[2K{}", message_row, truncated);
+            }
+            let line = format!("> {}", prompt_buf);
+            let truncated: String = line.chars().take(term_cols.saturating_sub(1)).collect();
+            print!("\x1B[{};1H\x1B[2K{}", prompt_row, truncated);
+        }
+    }
+}
+
+#[derive(Copy, Clone)]
+enum BottomMode {
+    Status,
+    Prompt,
+}
+
+/// In-TUI command modal. Keeps the alternate screen + raw mode active, shows
+/// a `> ` prompt on the bottom row of the TUI, runs a command, and returns
+/// when the user hits Esc (or enters an empty line after at least one command).
+/// The CPU is paused for the duration of the modal.
+///
+/// Returns `true` if a run-type command (`load`/`program`/`go`) executed, so
+/// the caller should resume execution (set RUN state). Returns `false` if the
+/// modal was just dismissed (Esc/Ctrl+K/Ctrl+D, or a non-run command).
+fn run_command_modal(
+    emu: &mut rust_imsai_emulator::Imsai8080,
+    stdout: &mut io::Stdout,
+    program_name: &mut String,
+) -> bool {
+    // Force a redraw of the CRT area above the bottom row so the screen
+    // looks fresh before we show the prompt. The caller's `last_display`
+    // tracking will pick up changes naturally on the next loop iteration.
+    let mut input = String::new();
+    let mut last_message: Option<String> = None;
+    let mut ever_ran = false;
+    let mut resume = false;
+
+    // Initial paint: blank the prompt row, leave the row above for messages.
+    render_bottom_row(emu, program_name, BottomMode::Prompt, false, &input, None);
+    stdout.flush().ok();
+
+    loop {
+        if !event::poll(std::time::Duration::from_millis(100)).unwrap_or(false) {
+            continue;
+        }
+        let ev = match event::read() {
+            Ok(ev) => ev,
+            Err(_) => break,
+        };
+        let key = match ev {
+            Event::Key(k) => k,
+            Event::Resize(_, _) => continue, // caller's loop will re-render
+            _ => continue,
+        };
+
+        match key {
+            // Esc closes the modal. If the user typed something but didn't
+            // submit it, drop it silently (matches less/vim convention).
+            KeyEvent { code: KeyCode::Esc, .. } => {
+                break;
+            }
+            // Ctrl+K also closes — symmetric with the way it opens.
+            KeyEvent {
+                code: KeyCode::Char('k'),
+                modifiers: KeyModifiers::CONTROL,
+                ..
+            } => {
+                break;
+            }
+            // Ctrl+D closes the modal here (use the `quit` command, or Ctrl+D
+            // at the main TUI, to shut the emulator down).
+            KeyEvent {
+                code: KeyCode::Char('d'),
+                modifiers: KeyModifiers::CONTROL,
+                ..
+            } => {
+                break;
+            }
+            KeyEvent {
+                code: KeyCode::Enter, ..
+            } => {
+                let cmd = input.trim().to_string();
+                input.clear();
+                if cmd.is_empty() {
+                    // Empty Enter: close if we've already run something,
+                    // otherwise just stay open.
+                    if ever_ran {
+                        break;
+                    }
+                    render_bottom_row(emu, program_name, BottomMode::Prompt, false, &input, None);
+                    stdout.flush().ok();
+                    continue;
+                }
+                let result = run_command(emu, &cmd, program_name);
+                if result.quit {
+                    // Cleanup TUI state before exiting so the user's terminal
+                    // isn't left in alt-screen + raw mode.
+                    stdout.execute(LeaveAlternateScreen).ok();
+                    disable_raw_mode().ok();
+                    eprintln!("{}", result.message);
+                    std::process::exit(0);
+                }
+                last_message = Some(result.message.clone());
+                ever_ran = true;
+                render_bottom_row(emu, program_name, BottomMode::Prompt, false, &input, last_message.as_deref());
+                stdout.flush().ok();
+                if result.close_after {
+                    // A run-type command (load/program/go): resume execution
+                    // when the modal closes so the program actually runs even
+                    // if we were stopped (e.g. F5) before opening the modal.
+                    resume = true;
+                    // No sleep: the message is on screen for one frame, then
+                    // the main loop reclaims the row. Fast enough to feel
+                    // responsive.
+                    break;
+                }
+            }
+            KeyEvent {
+                code: KeyCode::Backspace, ..
+            } => {
+                input.pop();
+                render_bottom_row(emu, program_name, BottomMode::Prompt, false, &input, last_message.as_deref());
+                stdout.flush().ok();
+            }
+            KeyEvent {
+                code: KeyCode::Char(c),
+                modifiers: KeyModifiers::NONE,
+                ..
+            }
+            | KeyEvent {
+                code: KeyCode::Char(c),
+                modifiers: KeyModifiers::SHIFT,
+                ..
+            } => {
+                input.push(c);
+                render_bottom_row(emu, program_name, BottomMode::Prompt, false, &input, last_message.as_deref());
+                stdout.flush().ok();
+            }
+            _ => {}
+        }
+    }
+
+    // Clear the modal's rows (prompt + the message row above it). The caller
+    // forces a CRT/status repaint, but on a tall terminal the message row sits
+    // in the blank gap below the CRT, which neither the CRT nor the status bar
+    // would otherwise overwrite.
+    let term_rows = crossterm::terminal::size().unwrap_or((80, 24)).1;
+    let anchor = status_anchor_row(term_rows);
+    print!("\x1B[{};1H\x1B[2K", anchor.saturating_sub(1).max(1));
+    print!("\x1B[{};1H\x1B[2K", anchor);
+    stdout.flush().ok();
+
+    resume
+}
+
+/// Result of executing one command in the TUI modal.
+struct CommandResult {
+    /// One-line human-readable result, shown on the row above the prompt.
+    message: String,
+    /// If true, the modal loop should break after showing the message.
+    /// Used by `go` (resume execution and return to the TUI) so the
+    /// user sees the result before the modal closes.
+    close_after: bool,
+    /// If true, the process should exit. The modal handles the TUI cleanup
+    /// (leave alternate screen, disable raw mode) and then `std::process::exit`s.
+    quit: bool,
+}
+
+/// Reset the console hardware for a freshly launched program, mirroring a
+/// front-panel RESET. Resets both 8251A UART channels back to power-on
+/// (ExpectMode) state and clears the CRT.
+///
+/// Without the UART reset, a program that re-initializes the 8251A
+/// (mode byte, then command byte) is misread when the chip is still in the
+/// previous program's `Ready` state: the mode byte is taken as a command, and
+/// because it carries the internal-reset bit the following command byte is
+/// then taken as a mode -- leaving TX disabled, so the program's output is
+/// silently dropped.
+fn reset_console_for_new_program(emu: &mut rust_imsai_emulator::Imsai8080) {
+    emu.bus.serial().channel_a_mut().reset();
+    emu.bus.serial().channel_b_mut().reset();
+    emu.bus.serial().video_mut().clear();
+}
+
+/// Execute a single command string. Returns a `CommandResult` describing
+/// what to display and whether the modal should close.
+fn run_command(
+    emu: &mut rust_imsai_emulator::Imsai8080,
+    input: &str,
+    program_name: &mut String,
+) -> CommandResult {
+    let parts: Vec<&str> = input.splitn(3, ' ').collect();
+    let close = |msg: String| CommandResult { message: msg, close_after: true, quit: false };
+    let stay = |msg: String| CommandResult { message: msg, close_after: false, quit: false };
+    match parts[0].to_lowercase().as_str() {
+        "load" => {
+            let path = match parts.get(1) {
+                Some(p) => *p,
+                None => return stay("Usage: load <file> [addr]".to_string()),
+            };
+            let addr: u16 = parts
+                .get(2)
+                .and_then(|s| u16::from_str_radix(s.trim_start_matches("0x").trim_start_matches("0X"), 16).ok())
+                .unwrap_or(0);
+            match std::fs::read(path) {
+                Ok(data) => {
+                    reset_console_for_new_program(emu);
+                    emu.load_program(addr, &data);
+                    emu.cpu.pc = addr;
+                    emu.cpu.halted = false;
+                    *program_name = format!("{} @ {:04X}", path, addr);
+                    // Close the modal so the TUI's main loop resumes
+                    // execution and the program's output appears on the CRT.
+                    close(format!("Loaded {} bytes at {:04X}, running...", data.len(), addr))
+                }
+                Err(e) => stay(format!("Error loading '{}': {}", path, e)),
+            }
+        }
+        "mount" => {
+            let path = match parts.get(1) {
+                Some(p) => *p,
+                None => return stay("Usage: mount <disk.img>".to_string()),
+            };
+            match emu
+                .bus
+                .card_mut::<TarbellCard>()
+                .expect("Tarbell card")
+                .insert_disk(0, path)
+            {
+                Ok(()) => stay(format!("Disk mounted in drive A: {}", path)),
+                Err(e) => stay(format!("Error mounting '{}': {}", path, e)),
+            }
+        }
+        "program" => {
+            let path = match parts.get(1) {
+                Some(p) => *p,
+                None => return stay("Usage: program <file.json>".to_string()),
+            };
+            let pbuf = PathBuf::from(path);
+            match load_program_file(&pbuf) {
+                Ok(prog) => {
+                    let start = find_program_start(&prog).unwrap_or(0);
+                    reset_console_for_new_program(emu);
+                    execute_panel_program(emu, &prog);
+                    emu.cpu.pc = start;
+                    emu.cpu.halted = false;
+                    *program_name = prog.name.clone();
+                    // Close the modal so the TUI's main loop resumes and the
+                    // program actually runs (matching the `load` command).
+                    // Without this the program sits loaded-but-paused and the
+                    // screen stays blank.
+                    close(format!("Running {} (PC={:04X})...", prog.name, start))
+                }
+                Err(e) => stay(format!("Error: {}", e)),
+            }
+        }
+        "go" | "run" => {
+            emu.cpu.halted = false;
+            // Resume execution and return to the TUI so the user can see it run.
+            close("Resuming execution. Press Ctrl+K to pause.".to_string())
+        }
+        "reset" => {
+            *emu = rust_imsai_emulator::Imsai8080::new();
+            *program_name = String::new();
+            stay("Cold reset. Memory cleared, CPU at 0x0000.".to_string())
+        }
+        "status" => {
+            stay(format!(
+                "PC={:04X} SP={:04X} A={:02X} B={:02X} C={:02X} D={:02X} E={:02X} H={:02X} L={:02X} {}",
+                emu.cpu.pc, emu.cpu.sp, emu.cpu.a,
+                emu.cpu.b, emu.cpu.c, emu.cpu.d, emu.cpu.e, emu.cpu.h, emu.cpu.l,
+                if emu.cpu.halted { "HALT" } else { "RUN" }
+            ))
+        }
+        "quit" | "exit" => {
+            // Save and signal the modal to exit the process. The modal
+            // handles the TUI cleanup (leave alternate screen, disable raw
+            // mode) before calling `std::process::exit`.
+            let mem_path = std::path::Path::new("imsai_memory.json");
+            match save_memory_to_file(&emu.bus.memory().ram, mem_path) {
+                Ok(()) => eprintln!("Memory saved to {}", mem_path.display()),
+                Err(e) => eprintln!("Warning: failed to save {}: {}", mem_path.display(), e),
+            }
+            CommandResult {
+                message: "Exiting...".to_string(),
+                close_after: true,
+                quit: true,
+            }
+        }
+        "help" | "?" => {
+            stay("Commands: load <file> [addr], mount <disk.img>, program <file.json>, go, reset, status, quit".to_string())
+        }
+        _ => stay("Unknown command. Type 'help' for the list.".to_string()),
+    }
+}
+
 fn print_instructions_summary(count: u64, elapsed: std::time::Duration) {
     let secs = elapsed.as_secs_f64();
     let ips = if secs > 0.0 { count as f64 / secs } else { 0.0 };
