@@ -11,6 +11,7 @@ use crossterm::{
 
 use rust_imsai_emulator::save_memory_to_file;
 use rust_imsai_emulator::load_memory_from_file;
+use rust_imsai_emulator::TarbellCard;
 
 /// A front panel program step (same format as the GUI uses).
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -120,18 +121,19 @@ fn print_usage(args: &Vec<String>) {
     eprintln!("Mode (choose one):");
     eprintln!("  --load <file> [addr]       Load raw binary at address (default 0x0000)");
     eprintln!("  --program <file.json>      Load a front panel program (.json)");
-    eprintln!("  (no arguments)             Start with empty memory (bare-metal)");
+    eprintln!("  (no arguments)             Start with saved memory (or empty if first run)");
     eprintln!();
     eprintln!("Options:");
-    eprintln!("  --batch, -b         Batch mode (non-interactive, 50M instructions)");
-    eprintln!("  --trace, -t         Trace every instruction");
-    eprintln!("  --vtrace, -v        Verbose trace (with I/O logging)");
-    eprintln!("  --diag, -d          Diagnostic mode (I/O log + region tracking)");
-    eprintln!("  --step, -s          Step trace (first 500 instructions)");
-    eprintln!("  --pctrace, -p       PC ring-buffer trace (last 8K instructions)");
-    eprintln!("  --script            Scripted mode (captures console output)");
-    eprintln!("  --cmd \"text\"        Pre-load keyboard input for scripted testing");
-    eprintln!("  --help, -h          Show this help");
+    eprintln!("  --disk <file>              Mount disk image in drive A");
+    eprintln!("  --batch, -b                Batch mode (non-interactive, 50M instructions)");
+    eprintln!("  --trace, -t                Trace every instruction");
+    eprintln!("  --vtrace, -v               Verbose trace (with I/O logging)");
+    eprintln!("  --diag, -d                 Diagnostic mode (I/O log + region tracking)");
+    eprintln!("  --step, -s                 Step trace (first 500 instructions)");
+    eprintln!("  --pctrace, -p              PC ring-buffer trace (last 8K instructions)");
+    eprintln!("  --script                   Scripted mode (captures console output)");
+    eprintln!("  --cmd \"text\"               Pre-load keyboard input for scripted testing");
+    eprintln!("  --help, -h                 Show this help");
 }
 
 fn main() {
@@ -161,6 +163,11 @@ fn main() {
 
     // --program <file.json>: load front panel program
     let program_arg = args.iter().position(|a| a == "--program")
+        .and_then(|i| args.get(i + 1))
+        .map(|s| s.to_string());
+
+    // --disk <file>: mount disk image in drive A
+    let disk_arg = args.iter().position(|a| a == "--disk")
         .and_then(|i| args.get(i + 1))
         .map(|s| s.to_string());
 
@@ -216,6 +223,17 @@ fn main() {
         } else {
             eprintln!("IMSAI 8080 - Bare-metal mode (empty memory, no program loaded)");
             eprintln!("Use --load <file> or --program <file.json> to load a program.");
+        }
+    }
+
+    // Mount disk image if specified (orthogonal to program/load)
+    if let Some(ref path) = disk_arg {
+        match emu.bus.card_mut::<TarbellCard>().expect("Tarbell card").insert_disk(0, path) {
+            Ok(()) => eprintln!("Disk mounted in drive A: {}", path),
+            Err(e) => {
+                eprintln!("Error mounting disk '{}': {}", path, e);
+                return;
+            }
         }
     }
 

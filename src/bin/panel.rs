@@ -7,6 +7,7 @@
 //!   imsai-gui                 Start with empty memory (or saved state), front panel only
 //!   imsai-gui --program      Load a front panel program (.json)
 //!   imsai-gui --load <file> [addr]  Load binary at address (default 0x0000)
+//!   imsai-gui --disk <file>  Mount disk image in drive A
 
 use raylib::prelude::RaylibDraw;
 use std::env;
@@ -134,6 +135,7 @@ use raylib::math::Vector2;
 use raylib::text::RaylibFont;
 use rust_imsai_emulator::cards::PanelSwitch;
 use rust_imsai_emulator::Imsai8080;
+use rust_imsai_emulator::TarbellCard;
 use rust_imsai_emulator::save_memory_to_file;
 use rust_imsai_emulator::load_memory_from_file;
 use serde::{Deserialize, Serialize};
@@ -235,6 +237,10 @@ fn main() {
         .iter()
         .position(|a| a == "--program")
         .and_then(|i| args.get(i + 1).cloned());
+    let disk_arg = args
+        .iter()
+        .position(|a| a == "--disk")
+        .and_then(|i| args.get(i + 1).cloned());
 
     if args.contains(&"--help".to_string()) || args.contains(&"-h".to_string()) {
         eprintln!("IMSAI 8080 Front Panel");
@@ -245,6 +251,7 @@ fn main() {
         eprintln!("  (default)           Start with empty memory, STOPPED");
         eprintln!("  --bare              (same as default, kept for compatibility)");
         eprintln!("  --load <file> [addr] Load raw binary at address (default 0x0000)");
+        eprintln!("  --disk <file>       Mount disk image in drive A");
         eprintln!("  --program <file>    Load a front panel program (.json), STOPPED");
         eprintln!("  --help, -h          Show this help");
         return;
@@ -355,6 +362,14 @@ fn main() {
         }
         false
     };
+
+    // Mount disk image if specified (orthogonal to program/load)
+    if let Some(ref path) = disk_arg {
+        match emu.bus.card_mut::<TarbellCard>().expect("Tarbell card").insert_disk(0, path) {
+            Ok(()) => eprintln!("Disk mounted in drive A: {}", path),
+            Err(e) => eprintln!("Error mounting disk '{}': {}", path, e),
+        }
+    }
 
     let mut term = [[0x20u8; TERM_COLS]; TERM_ROWS];
     let mut tcx: usize = 0;

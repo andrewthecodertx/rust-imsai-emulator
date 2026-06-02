@@ -40,6 +40,7 @@ deletes the saved state).
 | (none)                   | Start with empty memory, STOPPED                  |
 | `--bare`                 | Same as default (kept for compatibility)          |
 | `--load <file> [0xADDR]` | Load raw binary file at address                    |
+| `--disk <file>`          | Mount disk image in drive A                       |
 | `--program <file>`       | Load and execute a front panel program (JSON)      |
 
 ### Front Panel Programs
@@ -112,15 +113,16 @@ Mode (choose one):
   (no arguments)             Start with saved memory (or empty if first run)
 
 Options:
-  (default)         Interactive terminal mode with keyboard input
-  --batch, -b        Batch mode (non-interactive, 50M instructions)
-  --trace, -t        Trace every instruction
-  --vtrace, -v       Verbose trace (with I/O logging)
-  --diag, -d         Diagnostic mode (I/O log + region tracking)
-  --step, -s         Step trace (first 500 instructions)
-  --pctrace, -p      PC ring-buffer trace (last 8K instructions)
-  --script            Scripted mode (captures console output)
-  --cmd "text"        Pre-load keyboard input for scripted testing
+  --disk <file>              Mount disk image in drive A
+  (default)                  Interactive terminal mode with keyboard input
+  --batch, -b                Batch mode (non-interactive, 50M instructions)
+  --trace, -t                Trace every instruction
+  --vtrace, -v               Verbose trace (with I/O logging)
+  --diag, -d                 Diagnostic mode (I/O log + region tracking)
+  --step, -s                 Step trace (first 500 instructions)
+  --pctrace, -p              PC ring-buffer trace (last 8K instructions)
+  --script                   Scripted mode (captures console output)
+  --cmd "text"               Pre-load keyboard input for scripted testing
 ```
 
 ## Terminal Controls
