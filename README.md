@@ -27,17 +27,18 @@ The `imsai-panel` binary provides a visual raylib front panel:
 cargo run --bin imsai-panel
 ```
 
-Defaults to running the UART test program (prints "A" continuously on
-the console display). The program is preloaded into memory starting at
-address `0x0000` before the panel comes up, so address 0 holds `0x3E`
-(the `MVI A,...` opcode) rather than the floating-bus `0xFF` you'd see
-on a freshly powered-on IMSAI with no software. Use `--bare` to start
-with empty memory.
+Defaults to empty memory (all addresses = 0xFF), matching a powered-on
+IMSAI with no software. Use the program loader (F2) or command-line flags
+to load software before pressing F5 to run.
+
+Memory state is automatically saved to `imsai_memory.json` on exit and
+restored on the next launch. Press R to cold-reset (clears memory and
+deletes the saved state).
 
 | Flag                     | Description                                      |
 | ------------------------ | ------------------------------------------------ |
-| (none)                   | Start with UART test program loaded, STOPPED    |
-| `--bare`                 | Start with empty memory (all addresses = 0xFF)  |
+| (none)                   | Start with empty memory, STOPPED                |
+| `--bare`                 | Same as default (kept for compatibility)        |
 | `--load <file> [0xADDR]` | Load raw binary file at address                  |
 | `--disk <file>`          | Load disk image and boot CP/M 2.2                |
 | `--program <file>`       | Load and execute a front panel program (JSON)    |
@@ -74,11 +75,11 @@ Step types:
 The `load` action is a shortcut that writes bytes via `load_program()` instead of toggling each byte through the front panel. Use it for longer programs. The other actions operate the front panel interface exactly as a human would.
 
 ```bash
-# Run the UART test program (toggles each byte in via front panel)
-cargo run --bin imsai-panel -- --program programs/uart-test.json
+# Run the UART test program
+cargo run --bin imsai-panel -- --program programs/uart_test.json
 
-# Same program using fast load (loads all bytes at once)
-cargo run --bin imsai-panel -- --program programs/uart-test-fast.json
+# Run the Hello World program
+cargo run --bin imsai-panel -- --program programs/hello-world.json
 ```
 
 ### Front Panel Controls
@@ -92,7 +93,7 @@ cargo run --bin imsai-panel -- --program programs/uart-test-fast.json
 | EXAMINE button                  | Read byte at address switches into data LEDs        |
 | DEPOSIT button                  | Write data switches into memory at address switches |
 | EX NXT / DEP NXT                | Increment address then examine/deposit              |
-| R key                           | Reset to UART test program                          |
+| R key                           | Cold reset (clear RAM, delete `imsai_memory.json`) |
 | Keyboard (when running)         | Send characters to console UART                     |
 
 ### Terminal Mode (CLI)

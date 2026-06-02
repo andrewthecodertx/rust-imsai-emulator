@@ -4,15 +4,15 @@
 //! and function buttons. No ROM, no CP/M, just hardware.
 //!
 //! Usage:
-//!   imsai-panel              Start with UART test program running (demo mode)
-//!   imsai-panel --bare       Start with empty memory, front panel only
+//!   imsai-panel              Start with empty memory, front panel only
+//!   imsai-panel --program    Load a front panel program (.json)
 //!   imsai-panel --load <file> [addr]  Load binary at address (default 0x0000)
 //!   imsai-panel --disk <file>         Load disk image and boot CP/M
 
 use raylib::prelude::RaylibDraw;
 use std::env;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// State for the in-app file picker overlay.
 #[derive(Debug)]
@@ -136,7 +136,12 @@ use raylib::text::RaylibFont;
 use rust_imsai_emulator::cards::PanelSwitch;
 use rust_imsai_emulator::Imsai8080;
 use rust_imsai_emulator::TarbellCard;
+use rust_imsai_emulator::save_memory_to_file;
+use rust_imsai_emulator::load_memory_from_file;
 use serde::{Deserialize, Serialize};
+
+/// File where memory contents are persisted between sessions.
+const MEMORY_FILE: &str = "imsai_memory.json";
 
 /// Candidate system paths for the smooth branding font (first that loads wins).
 const LOGO_FONT_PATHS: &[&str] = &[
@@ -220,23 +225,13 @@ fn ctrl_col_x(i: usize) -> i32 {
     CTRL_X0 + i as i32 * CTRL_STEP
 }
 
-/// UART test program: initializes 8251A and prints 'A' forever.
-const UART_TEST: [u8; 15] = [
-    0x3E, 0x4E, // MVI A, 0x4E (8 data, no parity, 1 stop, 16x)
-    0xD3, 0x01, // OUT 0x01  (mode command)
-    0x3E, 0x05, // MVI A, 0x05 (TX enable, RX enable)
-    0xD3, 0x01, // OUT 0x01  (command)
-    0x3E, 0x41, // MVI A, 0x41 ('A')
-    0xD3, 0x00, // OUT 0x00  (data port)
-    0xC3, 0x0A, 0x00, // JMP 0x000A
-];
 
 /// CCP base address for CP/M 2.2 64K system.
 const CPMB: u16 = 0xE400;
 
 fn main() {
     let args: Vec<String> = env::args().collect();
-    let bare = args.contains(&"--bare".to_string());
+    let _bare = args.contains(&"--bare".to_string()); // kept for backward compat
     let load_arg = args
         .iter()
         .position(|a| a == "--load")
@@ -256,8 +251,8 @@ fn main() {
         eprintln!("Usage: imsai-panel [OPTIONS]");
         eprintln!();
         eprintln!("Options:");
-        eprintln!("  (default)           Start with UART test program loaded, STOPPED");
-        eprintln!("  --bare              Start with empty memory (front panel only)");
+        eprintln!("  (default)           Start with empty memory, STOPPED");
+        eprintln!("  --bare              (same as default, kept for compatibility)");
         eprintln!("  --load <file> [addr] Load raw binary at address (default 0x0000)");
         eprintln!("  --disk <file>       Load disk image and boot CP/M 2.2");
         eprintln!("  --program <file>    Load a front panel program (.json), STOPPED");
@@ -318,70 +313,71 @@ fn main() {
 
     // Load program/disk based on arguments. All modes start STOPPED.
     // The user presses F5 or clicks RUN/STOP to begin execution.
-    let _loaded_program = if !bare {
-        if let Some(ref path) = program_arg {
-            let pbuf = PathBuf::from(path);
-            match load_program_file(&pbuf) {
-                Ok(prog) => {
-                    eprintln!("Loaded program: {}", prog.name);
-                    execute_panel_program(&mut emu, &prog);
-                    // Set address switches to start address of program
-                    if let Some(start_addr) = find_program_start(&prog) {
-                        for i in 0..16 {
-                            addr_sw[i] = (start_addr >> (15 - i)) & 1 != 0;
-                        }
-                    }
-                    program_name = prog.name.clone();
-                    true
-                }
-                Err(e) => {
-                    eprintln!("Error: {}", e);
-                    false
-                }
-            }
-        } else if let Some(ref path) = disk_arg {
-            match emu
-                .bus
-                .card_mut::<TarbellCard>()
-                .unwrap()
-                .insert_disk(0, path)
-            {
-                Ok(()) => {
-                    boot_cpm(&mut emu);
-                    // Start STOPPED at CCP entry point, user presses F5 to run
-                    program_name = "CP/M 2.2".to_string();
-                }
-                Err(e) => eprintln!("Error loading disk '{}': {}", path, e),
-            }
-            true
-        } else if let Some(ref path) = load_arg {
-            let addr_idx = args.iter().position(|a| a == "--load").unwrap() + 2;
-            let addr: u16 = args
-                .get(addr_idx)
-                .and_then(|s| u16::from_str_radix(s.trim_start_matches("0x"), 16).ok())
-                .unwrap_or(0);
-            match std::fs::read(path) {
-                Ok(data) => {
-                    emu.load_program(addr, &data);
-                    emu.panel.set_address_switches(addr);
-                    emu.process_panel();
+    let _loaded_program = if let Some(ref path) = program_arg {
+        let pbuf = PathBuf::from(path);
+        match load_program_file(&pbuf) {
+            Ok(prog) => {
+                eprintln!("Loaded program: {}", prog.name);
+                execute_panel_program(&mut emu, &prog);
+                // Set address switches to start address of program
+                if let Some(start_addr) = find_program_start(&prog) {
                     for i in 0..16 {
-                        addr_sw[i] = (addr >> (15 - i)) & 1 != 0;
+                        addr_sw[i] = (start_addr >> (15 - i)) & 1 != 0;
                     }
-                    program_name = format!("{} @ {:04X}", path, addr);
                 }
-                Err(e) => eprintln!("Error loading '{}': {}", path, e),
+                program_name = prog.name.clone();
+                true
             }
-            true
-        } else {
-            // Default: load UART test program, start STOPPED
-            emu.load_program(0x0000, &UART_TEST);
-            emu.panel.set_address_switches(0x0000);
-            emu.process_panel();
-            program_name = "UART Test".to_string();
-            true
+            Err(e) => {
+                eprintln!("Error: {}", e);
+                false
+            }
         }
+    } else if let Some(ref path) = disk_arg {
+        match emu
+            .bus
+            .card_mut::<TarbellCard>()
+            .unwrap()
+            .insert_disk(0, path)
+        {
+            Ok(()) => {
+                boot_cpm(&mut emu);
+                // Start STOPPED at CCP entry point, user presses F5 to run
+                program_name = "CP/M 2.2".to_string();
+            }
+            Err(e) => eprintln!("Error loading disk '{}': {}", path, e),
+        }
+        true
+    } else if let Some(ref path) = load_arg {
+        let addr_idx = args.iter().position(|a| a == "--load").unwrap() + 2;
+        let addr: u16 = args
+            .get(addr_idx)
+            .and_then(|s| u16::from_str_radix(s.trim_start_matches("0x"), 16).ok())
+            .unwrap_or(0);
+        match std::fs::read(path) {
+            Ok(data) => {
+                emu.load_program(addr, &data);
+                emu.panel.set_address_switches(addr);
+                emu.process_panel();
+                for i in 0..16 {
+                    addr_sw[i] = (addr >> (15 - i)) & 1 != 0;
+                }
+                program_name = format!("{} @ {:04X}", path, addr);
+            }
+            Err(e) => eprintln!("Error loading '{}': {}", path, e),
+        }
+        true
     } else {
+        // No program/disk/load specified: restore saved memory if it exists
+        let mem_path = Path::new(MEMORY_FILE);
+        if mem_path.exists() {
+            match load_memory_from_file(&mut emu.bus.memory().ram, mem_path) {
+                Ok(()) => eprintln!("Restored memory from {}", MEMORY_FILE),
+                Err(e) => eprintln!("Warning: failed to load {}: {}", MEMORY_FILE, e),
+            }
+        } else {
+            eprintln!("No program loaded. Use --program, --load, or --disk to load software.");
+        }
         false
     };
 
@@ -729,10 +725,9 @@ fn main() {
                 }
             }
         }
-        // R: Reset to UART test, STOPPED (only when picker is closed)
+        // R: Cold reset (clear memory, STOPPED, delete saved state)
         if matches!(picker, PickerState::Closed) && rl.is_key_pressed(KeyboardKey::KEY_R) {
             emu = Imsai8080::new();
-            emu.load_program(0x0000, &UART_TEST);
             emu.panel.set_address_switches(0x0000);
             emu.process_panel();
             addr_sw = [false; 16];
@@ -741,7 +736,9 @@ fn main() {
             tcx = 0;
             tcy = 0;
             running = false;
-            program_name = "UART Test".to_string();
+            program_name.clear();
+            // Delete saved memory so next start is truly clean
+            let _ = std::fs::remove_file(MEMORY_FILE);
         }
 
         // Keyboard input for terminal (only when running and picker closed)
@@ -1446,6 +1443,13 @@ fn main() {
                 break;
             }
         }
+    }
+
+    // Save memory state to file on exit
+    let mem_path = Path::new(MEMORY_FILE);
+    match save_memory_to_file(&emu.bus.memory().ram, mem_path) {
+        Ok(()) => eprintln!("Memory saved to {}", MEMORY_FILE),
+        Err(e) => eprintln!("Warning: failed to save {}: {}", MEMORY_FILE, e),
     }
 }
 

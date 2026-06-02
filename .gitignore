@@ -2,4 +2,5 @@
 /target
 /disk_images/
 *.backup
+imsai_memory.json
 CLAUDE.md
