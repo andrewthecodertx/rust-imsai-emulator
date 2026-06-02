@@ -7,20 +7,20 @@
 //! - MemoryCard: 64K RAM (full address space)
 //! - SerialCard: IMSAI SIO-2 board (2x Intel 8251A UART)
 //! - TarbellCard: Tarbell 1011 floppy controller (WD FD1771 + board logic)
+//! - FrontPanel: IMSAI 8080 front panel (switches + LEDs)
 
+mod front_panel;
 mod memory;
 mod serial;
 mod tarbell;
 
+pub use front_panel::FrontPanel;
+pub use front_panel::PanelLeds;
+pub use front_panel::PanelSwitch;
+pub use front_panel::RunState;
 pub use memory::MemoryCard;
 pub use serial::SerialCard;
 pub use tarbell::TarbellCard;
-
-use crate::chips::Fd1771;
-use crate::chips::Uart8251;
-use crate::disk::DiskImage;
-use crate::io::Keyboard;
-use crate::io::VideoDisplay;
 
 /// An S-100 bus card.
 ///
@@ -31,6 +31,9 @@ use crate::io::VideoDisplay;
 /// A memory card (RAM) responds to memory transactions.
 /// A peripheral card (Serial, Tarbell) responds to I/O transactions.
 /// Some cards could do both (e.g., memory-mapped I/O or ROM boards).
+///
+/// The front panel is NOT a Card: it directly accesses the bus and CPU
+/// for examine/deposit/run/stop operations. It doesn't respond to I/O ports.
 pub trait Card {
     /// Read from an I/O port this card owns.
     fn io_read(&mut self, port: u8) -> u8;
