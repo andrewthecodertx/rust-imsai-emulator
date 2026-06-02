@@ -81,3 +81,47 @@ fn test_front_panel_memory_initializes_to_ff() {
             "Memory at {:04X} should be 0xFF (floating bus)", addr);
     }
 }
+#[test]
+fn test_hello_world_panel_load() {
+    use rust_imsai_emulator::Imsai8080;
+    use rust_imsai_emulator::cards::PanelSwitch;
+
+    let mut emu = Imsai8080::new();
+
+    // Hello World program
+    let hex = "3E 4E D3 01 3E 05 D3 01 21 35 00 DB 01 E6 01 CA 0B 00 7E FE 00 CA 1E 00 D3 00 23 C3 0B 00 DB 01 E6 01 CA 1E 00 3E 0D D3 00 DB 01 E6 01 CA 29 00 3E 0A D3 00 76 48 45 4C 4C 4F 2C 20 57 4F 52 4C 44 21 00";
+    let bytes: Vec<u8> = hex.split_whitespace().map(|b| u8::from_str_radix(b, 16).unwrap()).collect();
+
+    // Simulate what the panel's F2 load does:
+    // 1. load_program to write bytes into memory
+    emu.load_program(0x0000, &bytes);
+
+    // 2. "run" step: set address switches and press RunStop
+    emu.panel.set_address_switches(0x0000);
+    emu.panel.press_switch(PanelSwitch::RunStop);
+    emu.process_panel();
+
+    // Verify panel is running
+    assert!(emu.panel.is_running(), "Panel should be in running state after RunStop");
+    assert_eq!(emu.cpu.pc, 0x0000, "PC should be set to 0x0000");
+
+    // Run the CPU for a batch (like the panel does)
+    let count = emu.run_batch(50000);
+    eprintln!("Executed {} instructions, PC=0x{:04X}, halted={}", count, emu.cpu.pc, emu.cpu.halted);
+
+    // Drain UART output (like the panel does)
+    emu.bus.serial().channel_a_mut().drain_tx();
+    emu.bus.serial().channel_a_mut().update_tx();
+    let output = emu.bus.serial().channel_a_mut().take_output();
+
+    let output_str: String = output.iter().map(|&b| {
+        if b >= 0x20 && b < 0x7F { b as char } else if b == 0x0D { '\r' } else if b == 0x0A { '\n' } else { '?' }
+    }).collect();
+
+    eprintln!("UART output: {:?}", output_str);
+    eprintln!("UART output bytes: {:?}", output);
+
+    // The program should output "HELLO, WORLD!" followed by CR LF
+    assert!(output_str.contains("HELLO, WORLD!"), "Output should contain 'HELLO, WORLD!', got: {:?}", output_str);
+    assert!(emu.cpu.halted, "CPU should be halted after HLT, PC=0x{:04X}", emu.cpu.pc);
+}
