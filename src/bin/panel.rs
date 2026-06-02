@@ -129,7 +129,8 @@ fn parse_hex_bytes(s: &str) -> Result<Vec<u8>, String> {
     s.split_whitespace().map(|b| parse_hex8(b)).collect()
 }
 use raylib::consts::{KeyboardKey, MouseButton, TextureFilter};
-use raylib::core::texture::RaylibTexture2D;
+use raylib::core::texture::{RaylibRenderTexture2D, RaylibTexture2D};
+use raylib::drawing::RaylibTextureModeExt;
 use raylib::math::Vector2;
 use raylib::text::RaylibFont;
 use rust_imsai_emulator::cards::PanelSwitch;
@@ -148,8 +149,17 @@ const LOGO_FONT_PATHS: &[&str] = &[
 ];
 
 // Window size
-const W: i32 = 1280;
-const H: i32 = 840;
+//
+// The window is resizable. The panel layout is authored at REF_W x REF_H
+// (scale = 1.0); we render the entire UI into a render texture at this
+// resolution, then blit it scaled to the window. Hit tests divide mouse
+// coords through the blit transform to land in the same layout space the
+// rest of the code uses.
+const REF_W: i32 = 1280;
+const REF_H: i32 = 840;
+const MIN_SCALE: f32 = 0.55;
+const MIN_W: i32 = 704;  // ceil(1280 * 0.55)
+const MIN_H: i32 = 462;  // ceil(840 * 0.55)
 
 // === IMSAI 8080 front panel layout ===
 // The real panel is a black face. LEDs and switches are organized into two
@@ -257,11 +267,23 @@ fn main() {
     }
 
     let (mut rl, thread) = raylib::init()
-        .size(W, H)
+        .size(1024, 680)  // start small enough to fit a 1600x900 laptop screen
+        .resizable()
         .title("IMSAI 8080 Microcomputer")
         .build();
 
+    rl.set_window_min_size(MIN_W, MIN_H);
     rl.set_target_fps(30);
+
+    // Render texture: we draw the entire UI at the reference resolution,
+    // then blit it scaled to the window each frame. Layout coordinates
+    // (1024x680) stay unchanged.
+    let mut target = rl
+        .load_render_texture(&thread, REF_W as u32, REF_H as u32)
+        .expect("failed to create render texture");
+    target
+        .texture()
+        .set_texture_filter(&thread, TextureFilter::TEXTURE_FILTER_BILINEAR);
 
     // Smooth TTF font for the IMSAI 8080 branding (the default raylib bitmap
     // font is blocky when scaled up). Falls back to the bitmap font if no
@@ -394,18 +416,38 @@ fn main() {
     let sw_blue = rgb(50, 45, 225);
     let sw_red = rgb(230, 45, 45);
 
-    // Panel rectangle.
+    // Panel rectangle (in layout space; scale() multiplies these on draw).
     let panel_x: i32 = PX;
     let panel_y: i32 = PY;
     let panel_w: i32 = PW;
     let panel_bottom: i32 = PY + PH;
 
     while !rl.window_should_close() {
+        // Compute the scale factor for this frame from the actual window
+        // size. Clamp at MIN_SCALE so the view never gets illegible.
+        let win_w = rl.get_screen_width();
+        let win_h = rl.get_screen_height();
+        let scale = ((win_w as f32 / REF_W as f32)
+            .min(win_h as f32 / REF_H as f32))
+            .max(MIN_SCALE);
+        // The blit is centered with letterboxing, so the layout-space
+        // origin within the window is offset by half the unused space.
+        let blit_ox = (win_w as f32 - REF_W as f32 * scale) * 0.5;
+        let blit_oy = (win_h as f32 - REF_H as f32 * scale) * 0.5;
+
+        // Mouse coords come back in window pixels. Subtract the blit
+        // origin and divide by scale to recover the layout-space coord
+        // (1024x680) that every hit test in this file uses.
+        let mouse_pos = || -> Vector2 {
+            let m = rl.get_mouse_position();
+            Vector2::new((m.x - blit_ox) / scale, (m.y - blit_oy) / scale)
+        };
+
         // ---- Input: toggle switches (suppressed when picker is open) ----
         if matches!(picker, PickerState::Closed)
             && rl.is_mouse_button_pressed(MouseButton::MOUSE_BUTTON_LEFT)
         {
-            let m = rl.get_mouse_position();
+            let m = mouse_pos();
 
             // Helper: did the click land on the paddle centered at column `cx`?
             let hit_paddle = |cx: i32| -> bool {
@@ -569,7 +611,7 @@ fn main() {
                 }
                 // Mouse click to select entry
                 if rl.is_mouse_button_pressed(MouseButton::MOUSE_BUTTON_LEFT) {
-                    let m = rl.get_mouse_position();
+                    let m = mouse_pos();
                     let overlay_x: i32 = 100;
                     let overlay_y: i32 = 150;
                     let overlay_w: i32 = 540;
@@ -794,6 +836,12 @@ fn main() {
 
         // ---- Draw ----
         let mut d = rl.begin_drawing(&thread);
+        // Draw the entire UI at reference resolution (1024x680) into our
+        // render texture, then blit it scaled to the window below. Calling
+        // draw_texture_mode on the draw handle (not on `rl`) makes the
+        // texture mode deref to RaylibDrawHandle, so TTF/measure_text etc.
+        // remain available inside the closure.
+        d.draw_texture_mode(&thread, &mut target, |mut d| {
         d.clear_background(bg);
 
         // === IMSAI 8080 front panel (black face) ===
@@ -1054,7 +1102,9 @@ fn main() {
         }
 
         // === Bottom bar: machine state + keyboard shortcuts ===
-        d.draw_rectangle(0, H - 22, W, 22, rgb(28, 28, 30));
+        // Part of the layout (REF_W x REF_H); scale() below scales it with
+        // the rest of the panel.
+        d.draw_rectangle(0, REF_H - 22, REF_W, 22, rgb(28, 28, 30));
         let cpu = &emu.cpu;
         let state = if cpu.halted {
             "HALT"
@@ -1068,20 +1118,20 @@ fn main() {
             state, cpu.pc, cpu.sp, cpu.a, cpu.b, cpu.c, cpu.d, cpu.e, cpu.h, cpu.l,
             program_name, cycles,
         );
-        d.draw_text(&line, 10, H - 16, 11, txt_dim);
+        d.draw_text(&line, 10, REF_H - 16, 11, txt_dim);
         d.draw_text(
             "F5 run/stop  F2 load  F3 save  R reset",
-            W - 320,
-            H - 16,
+            REF_W - 320,
+            REF_H - 16,
             11,
             txt_dim,
         );
 
         // === CRT Terminal display (below panel) ===
         let term_y: i32 = panel_bottom + 10;
-        let term_h: i32 = H - term_y - 28;
+        let term_h: i32 = REF_H - term_y - 28;
         let term_x: i32 = 8;
-        let term_w: i32 = W - 16;
+        let term_w: i32 = REF_W - 16;
         // CRT bezel (dark rounded border)
         d.draw_rectangle(
             term_x - 4,
@@ -1180,12 +1230,14 @@ fn main() {
             let overlay_y: i32 = 150;
             let overlay_w: i32 = 680;
             let overlay_h: i32 = 420;
-            // Dim background
+            // Dim background: covers the entire 1024x680 layout (and thus
+            // the entire visible blit, ignoring letterbox which is window
+            // background anyway).
             d.draw_rectangle(
                 0,
                 0,
-                W,
-                H,
+                REF_W,
+                REF_H,
                 raylib::color::Color {
                     r: 0,
                     g: 0,
@@ -1356,6 +1408,33 @@ fn main() {
         }
 
         // === End picker overlay ===
+
+        });  // end draw_texture_mode
+
+        // ---- Blit the texture to the window, scaled to fit, centered. ----
+        let dst_w = (REF_W as f32 * scale).round() as i32;
+        let dst_h = (REF_H as f32 * scale).round() as i32;
+        let dst_x = (win_w - dst_w) / 2;
+        let dst_y = (win_h - dst_h) / 2;
+        // Clear the window before blitting so the letterbox (when the
+        // window aspect ratio doesn't match the layout) shows the chassis
+        // color instead of the initial black framebuffer.
+        d.clear_background(bg);
+        // Render textures in raylib are flipped vertically (OpenGL
+        // convention); use negative source height to flip back.
+        d.draw_texture_pro(
+            &target,
+            raylib::math::Rectangle { x: 0.0, y: 0.0, width: REF_W as f32, height: -REF_H as f32 },
+            raylib::math::Rectangle {
+                x: dst_x as f32,
+                y: dst_y as f32,
+                width: dst_w as f32,
+                height: dst_h as f32,
+            },
+            Vector2::new(0.0, 0.0),
+            0.0,
+            rgb(255, 255, 255),
+        );
 
         drop(d);
 
