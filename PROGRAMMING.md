@@ -245,18 +245,15 @@ Start your program at 0x0000 or 0x0100 and use the console UART directly.
 
 ## Complete Example: Hello World
 
-This program initializes the UART and prints "HELLO" in a loop:
+This program initializes the UART, prints "HELLO, WORLD!" with a trailing
+newline, then halts the CPU. It polls TX Ready before each character:
 
 ```json
 {
-  "name": "Hello World",
-  "description": "Initializes UART and prints HELLO in a loop",
+  "name": "Hello, World!",
+  "description": "Initializes the UART and prints 'HELLO, WORLD!' with a newline, then halts. Demonstrates null-terminated strings, TX-ready polling, and HLT.",
   "steps": [
-    {
-      "action": "load",
-      "address": "0000",
-      "data": "3E 4E D3 01 3E 05 D3 01 11 10 00 1A E6 7F D3 00 FE 24 CA 0A 00 13 C3 0A 00 48 45 4C 4C 4F 24"
-    },
+    { "action": "load", "address": "0000", "data": "3E 4E D3 01 3E 05 D3 01 21 35 00 DB 01 E6 02 CA 0B 00 7E FE 00 CA 1E 00 D3 00 23 C3 0B 00 DB 01 E6 02 CA 1E 00 3E 0D D3 00 DB 01 E6 02 CA 29 00 3E 0A D3 00 76 48 45 4C 4C 4F 2C 20 57 4F 52 4C 44 21 00" },
     { "action": "run", "address": "0000" }
   ]
 }
@@ -269,22 +266,33 @@ Assembly listing:
 0002  D3 01      OUT 0x01       ; write mode command
 0004  3E 05      MVI A, 0x05    ; UART command: TX+RX enable
 0006  D3 01      OUT 0x01       ; write command
-0008  11 10 00   LXI D, MSG    ; DE = pointer to string
-000B  1A         LDAX D          ; A = next character
-000C  E6 7F      ANI 0x7F       ; mask to 7 bits
-000E  D3 00      OUT 0x00       ; send to console
-0010  FE 24      CPI '$'        ; end of string?
-0012  CA 18 00   JZ RESTART     ; if so, loop back
-0015  13         INX D           ; next character
-0016  C3 0B 00   JMP NEXT       ; continue
-0019  C3 08 00   RESTART: JMP LOOP ; restart from beginning
-
-001C  "HELLO$"                  ; message data
+0008  21 35 00   LXI H, MSG    ; HL = string pointer
+000B  DB 01      IN 0x01        ; read UART status
+000D  E6 02      ANI 0x02       ; mask TX Ready bit
+000F  CA 0B 00   JZ 0x000B      ; loop until transmitter ready
+0012  7E         MOV A,M        ; load next character
+0013  FE 00      CPI 0x00       ; null terminator?
+0015  CA 1E 00   JZ DONE        ; done, print newline and halt
+0018  D3 00      OUT 0x00       ; send character
+001A  23         INX H           ; advance string pointer
+001B  C3 0B 00   JMP 0x000B      ; next character
+001E  DB 01 DONE: IN 0x01       ; wait for TX Ready (CR)
+0020  E6 02      ANI 0x02
+0022  CA 1E 00   JZ 0x001E
+0025  3E 0D      MVI A, 0x0D    ; CR
+0027  D3 00      OUT 0x00
+0029  DB 01      IN 0x01        ; wait for TX Ready (LF)
+002B  E6 02      ANI 0x02
+002D  CA 29 00   JZ 0x0029
+0030  3E 0A      MVI A, 0x0A    ; LF
+0032  D3 00      OUT 0x00
+0034  76         HLT             ; stop CPU
+0035             MSG: "HELLO, WORLD!" + NUL
 ```
 
-Wait, that restart jumps to 0x0008 which re-sets DE each time through the
-string, so it will print "HELLO" repeatedly. The `CPI '$'` checks for the
-terminator. When found, jump back to `LOOP` (0x0008) to start over.
+The HLT instruction (0x76) stops the CPU. On the front panel, you will see the
+RUN LED turn off and the WAIT LED may change state. This is the correct
+behavior; the program has finished its work.
 
 ## Complete Example: Echo
 
@@ -329,6 +337,7 @@ The IMSAI 8080 uses the Intel 8080 instruction set. Common instructions:
 | Hex | Assembly | Description |
 |-----|----------|-------------|
 | 00 | NOP | No operation |
+| 76 | HLT | Halt the CPU (stop execution) |
 | 3E nn | MVI A, nn | Load immediate value into A |
 | 06 nn | MVI B, nn | Load immediate value into B |
 | 0E nn | MVI C, nn | Load immediate value into C |
