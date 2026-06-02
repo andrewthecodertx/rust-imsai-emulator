@@ -1,0 +1,8 @@
+{
+  "name": "Hello, World!",
+  "description": "Initializes the UART and prints 'HELLO, WORLD!' in a loop with newlines. Demonstrates string output and null-terminated iteration.",
+  "steps": [
+    { "action": "load", "address": "0000", "data": "3E 4E D3 01 3E 05 D3 01 21 22 00 7E FE 00 CA 17 00 D3 00 23 C3 0B 00 3E 0D D3 00 3E 0A D3 00 C3 08 00 48 45 4C 4C 4F 2C 20 57 4F 52 4C 44 21 00" },
+    { "action": "run", "address": "0000" }
+  ]
+}

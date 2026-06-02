@@ -14,6 +14,39 @@ use std::fs;
 use std::path::PathBuf;
 use raylib::prelude::RaylibDraw;
 
+/// State for the in-app file picker overlay.
+#[derive(Debug)]
+enum PickerState {
+    /// No picker visible.
+    Closed,
+    /// Load picker: showing a scrollable list of .json programs.
+    Load {
+        entries: Vec<PickerEntry>,
+        scroll: i32,
+        selected: i32,
+    },
+    /// Save picker: showing filename prompt.
+    Save {
+        filename: String,
+        cursor_blink: i32,
+    },
+}
+
+/// Action to take after the picker match block (avoids borrow conflicts).
+enum PickerAction {
+    Load(PathBuf),
+    Save(String),
+    Cancel,
+}
+
+/// One entry in the load picker file list.
+#[derive(Debug, Clone)]
+struct PickerEntry {
+    name: String,
+    description: String,
+    path: PathBuf,
+}
+
 // === Front panel program format ===
 // A program is a saved sequence of switch positions and button presses,
 // exactly as you would operate the real IMSAI 8080 front panel.
@@ -261,9 +294,9 @@ fn main() {
     let mut running = false;
     let mut cycles: u64 = 0;
     let mut step_pending = false;
-    let mut load_program_index: usize = 0;
     let mut status_msg = String::new();
     let mut status_msg_timer: i32 = 0; // frames remaining
+    let mut picker = PickerState::Closed;
 
     // Colors
     let bg        = raylib::color::Color { r: 25, g: 25, b: 30, a: 255 };
@@ -296,8 +329,8 @@ fn main() {
     let tp_w: i32 = W - tp_x - 10;  // terminal panel width
 
     while !rl.window_should_close() {
-        // ---- Input: toggle switches ----
-        if rl.is_mouse_button_pressed(MouseButton::MOUSE_BUTTON_LEFT) {
+        // ---- Input: toggle switches (suppressed when picker is open) ----
+        if matches!(picker, PickerState::Closed) && rl.is_mouse_button_pressed(MouseButton::MOUSE_BUTTON_LEFT) {
             let m = rl.get_mouse_position();
 
             // Address switches row (matches draw at addr_sw_y = 310)
@@ -345,30 +378,110 @@ fn main() {
             }
         }
 
-        // Keyboard shortcuts
-        if rl.is_key_pressed(KeyboardKey::KEY_F5) {
+        // Keyboard shortcuts (F5 suppressed when picker is open)
+        if matches!(picker, PickerState::Closed) && rl.is_key_pressed(KeyboardKey::KEY_F5) {
             emu.panel.press_switch(PanelSwitch::RunStop);
         }
-        // F2: Load program from PROGRAMS/ directory (cycles through available files)
-        // F3: Save current memory region as a program file
+        // F2: Open load picker (list .json programs in PROGRAMS/)
         if rl.is_key_pressed(KeyboardKey::KEY_F2) {
-            // Scan PROGRAMS/ for .json files
             let prog_dir = default_programs_dir();
-            if let Ok(entries) = fs::read_dir(&prog_dir) {
-                let mut json_files: Vec<String> = entries
+            if let Ok(entries_fs) = fs::read_dir(&prog_dir) {
+                let mut files: Vec<PickerEntry> = entries_fs
                     .filter_map(|e| e.ok())
                     .filter(|e| e.path().extension().map_or(false, |ext| ext == "json"))
-                    .filter_map(|e| e.path().to_str().map(|s| s.to_string()))
+                    .filter_map(|e| {
+                        let path = e.path();
+                        let entry = load_program_file(&path).ok()?;
+                        Some(PickerEntry {
+                            name: entry.name.clone(),
+                            description: entry.description.clone(),
+                            path,
+                        })
+                    })
                     .collect();
-                json_files.sort();
-                // Cycle to next program
-                if !json_files.is_empty() {
-                    load_program_index = (load_program_index + 1) % json_files.len();
-                    let path = PathBuf::from(&json_files[load_program_index]);
+                files.sort_by(|a, b| a.name.cmp(&b.name));
+                if files.is_empty() {
+                    status_msg = "No .json programs in PROGRAMS/".to_string();
+                    status_msg_timer = 180;
+                } else {
+                    picker = PickerState::Load { entries: files, scroll: 0, selected: 0 };
+                }
+            } else {
+                status_msg = "PROGRAMS/ directory not found".to_string();
+                status_msg_timer = 180;
+            }
+        }
+        // F3: Open save picker
+        if rl.is_key_pressed(KeyboardKey::KEY_F3) {
+            let pc = emu.cpu.pc;
+            let default_name = format!("save_{:04X}", pc);
+            picker = PickerState::Save { filename: default_name, cursor_blink: 0 };
+        }
+
+        // Handle picker input
+        // We check for load/save actions and store results, then apply after
+        // the match to avoid borrow conflicts with picker.
+        let mut picker_action: Option<PickerAction> = None;
+        match &mut picker {
+            PickerState::Closed => {}
+            PickerState::Load { entries, scroll, selected } => {
+                if rl.is_key_pressed(KeyboardKey::KEY_ESCAPE) {
+                    picker_action = Some(PickerAction::Cancel);
+                } else if rl.is_key_pressed(KeyboardKey::KEY_UP) {
+                    if *selected > 0 { *selected -= 1; }
+                    if *selected < *scroll { *scroll = *selected; }
+                } else if rl.is_key_pressed(KeyboardKey::KEY_DOWN) {
+                    if *selected < entries.len() as i32 - 1 { *selected += 1; }
+                    let visible_rows = 10;
+                    if *selected >= *scroll + visible_rows { *scroll = *selected - visible_rows + 1; }
+                } else if rl.is_key_pressed(KeyboardKey::KEY_ENTER) {
+                    if let Some(entry) = entries.get(*selected as usize).cloned() {
+                        picker_action = Some(PickerAction::Load(entry.path.clone()));
+                    }
+                }
+                // Mouse click to select entry
+                if rl.is_mouse_button_pressed(MouseButton::MOUSE_BUTTON_LEFT) {
+                    let m = rl.get_mouse_position();
+                    let overlay_x: i32 = 100;
+                    let overlay_y: i32 = 150;
+                    let overlay_w: i32 = 540;
+                    let overlay_h: i32 = 400;
+                    let list_y = overlay_y + 50;
+                    let list_h = overlay_h - 68;
+                    let row_h: i32 = 36;
+                    if m.x >= overlay_x as f32 && m.x < (overlay_x + overlay_w) as f32
+                        && m.y >= list_y as f32 && m.y < (list_y + list_h) as f32 {
+                        let click_row = ((m.y - list_y as f32) / row_h as f32) as i32;
+                        let new_sel = *scroll + click_row;
+                        if new_sel >= 0 && (new_sel as usize) < entries.len() {
+                            *selected = new_sel;
+                        }
+                    }
+                }
+            }
+            PickerState::Save { filename, cursor_blink } => {
+                *cursor_blink += 1;
+                if rl.is_key_pressed(KeyboardKey::KEY_ESCAPE) {
+                    picker_action = Some(PickerAction::Cancel);
+                } else if rl.is_key_pressed(KeyboardKey::KEY_ENTER) {
+                    picker_action = Some(PickerAction::Save(filename.clone()));
+                } else if rl.is_key_pressed(KeyboardKey::KEY_BACKSPACE) {
+                    filename.pop();
+                } else if let Some(ch) = rl.get_char_pressed() {
+                    if ch.is_alphanumeric() || ch == '_' || ch == '-' {
+                        filename.push(ch);
+                    }
+                }
+            }
+        }
+
+        // Process picker actions (outside the borrow)
+        if let Some(action) = picker_action {
+            match action {
+                PickerAction::Load(path) => {
                     match load_program_file(&path) {
                         Ok(prog) => {
                             eprintln!("Loaded: {}", prog.name);
-                            // Reset emulator, load program, start STOPPED
                             emu = Imsai8080::new();
                             execute_panel_program(&mut emu, &prog);
                             if let Some(start_addr) = find_program_start(&prog) {
@@ -383,45 +496,47 @@ fn main() {
                             tcy = 0;
                             running = false;
                             status_msg = format!("Loaded: {}", program_name);
-                            status_msg_timer = 180; // ~6 seconds at 30fps
+                            status_msg_timer = 180;
                         }
                         Err(e) => {
                             status_msg = format!("Error: {}", e);
                             status_msg_timer = 180;
                         }
                     }
-                } else {
-                    status_msg = "No .json programs in PROGRAMS/".to_string();
-                    status_msg_timer = 180;
+                    picker = PickerState::Closed;
+                }
+                PickerAction::Save(filename) => {
+                    let addr_val: u16 = addr_sw.iter().enumerate()
+                        .fold(0u16, |a, (i, &on)| if on { a | (1 << (15 - i)) } else { a });
+                    let start = addr_val;
+                    let dump_len: u16 = 256;
+                    let prog = memory_to_program(
+                        &filename,
+                        &format!("Saved from {:04X}, {} bytes", start, dump_len),
+                        start, dump_len, &emu,
+                    );
+                    if fs::create_dir_all(default_programs_dir()).is_ok() {
+                        let save_path = default_programs_dir().join(format!("{}.json", filename));
+                        match save_program_file(&prog, &save_path) {
+                            Ok(()) => {
+                                status_msg = format!("Saved: {}", save_path.display());
+                                status_msg_timer = 180;
+                            }
+                            Err(e) => {
+                                status_msg = format!("Save error: {}", e);
+                                status_msg_timer = 180;
+                            }
+                        }
+                    }
+                    picker = PickerState::Closed;
+                }
+                PickerAction::Cancel => {
+                    picker = PickerState::Closed;
                 }
             }
         }
-        if rl.is_key_pressed(KeyboardKey::KEY_F3) {
-            // Save current memory as a program
-            // Dumps 256 bytes from the current address switches position
-            let pc = emu.cpu.pc;
-            let dump_len: u16 = 256;
-            let prog = memory_to_program(
-                &format!("dump_{:04X}", pc),
-                &format!("Memory dump from {:04X}, {} bytes", pc, dump_len),
-                pc, dump_len, &emu,
-            );
-            if fs::create_dir_all(default_programs_dir()).is_ok() {
-                let filename = default_programs_dir().join(format!("dump_{:04X}.json", pc));
-                match save_program_file(&prog, &filename) {
-                    Ok(()) => {
-                        status_msg = format!("Saved: {}", filename.display());
-                        status_msg_timer = 180;
-                    }
-                    Err(e) => {
-                        status_msg = format!("Save error: {}", e);
-                        status_msg_timer = 180;
-                    }
-                }
-            }
-        }
-        // R: Reset to UART test, STOPPED
-        if rl.is_key_pressed(KeyboardKey::KEY_R) {
+        // R: Reset to UART test, STOPPED (only when picker is closed)
+        if matches!(picker, PickerState::Closed) && rl.is_key_pressed(KeyboardKey::KEY_R) {
             emu = Imsai8080::new();
             emu.load_program(0x0000, &UART_TEST);
             emu.panel.set_address_switches(0x0000);
@@ -436,8 +551,8 @@ fn main() {
             program_name = "UART Test".to_string();
         }
 
-        // Keyboard input for terminal (only when running)
-        if running {
+        // Keyboard input for terminal (only when running and picker closed)
+        if running && matches!(picker, PickerState::Closed) {
             if let Some(ch) = rl.get_char_pressed() {
                 emu.bus.serial().type_text(&ch.to_uppercase().collect::<String>());
             }
@@ -449,7 +564,10 @@ fn main() {
             }
         }
 
-        // ---- Update panel ----
+        // ---- Update panel & sync visuals ----
+        // User input already set addr_sw/data_sw via mouse clicks.
+        // Forward those to the panel, then read back in case the panel
+        // changed them (e.g., deposit_next auto-advances the address).
         let addr_val: u16 = addr_sw.iter().enumerate()
             .fold(0u16, |a, (i, &on)| if on { a | (1 << (15 - i)) } else { a });
         let data_val: u8 = data_sw.iter().enumerate()
@@ -457,6 +575,17 @@ fn main() {
         emu.panel.set_address_switches(addr_val);
         emu.panel.set_data_switches(data_val);
         emu.process_panel();
+
+        // Sync visual switches from panel (catches auto-advances from
+        // deposit_next, examine_next, and program loads)
+        let panel_addr = emu.panel.address_switches();
+        let panel_data = emu.panel.data_switches();
+        for i in 0..16 {
+            addr_sw[i] = (panel_addr >> (15 - i)) & 1 != 0;
+        }
+        for i in 0..8 {
+            data_sw[i] = (panel_data >> (7 - i)) & 1 != 0;
+        }
 
         if step_pending {
             emu.single_step();
@@ -643,7 +772,76 @@ fn main() {
             );
         }
 
-        // === Memory readout (small hex view at PC, below switches on left) ===
+        // === File picker overlay ===
+        if !matches!(picker, PickerState::Closed) {
+            let overlay_x: i32 = 100;
+            let overlay_y: i32 = 150;
+            let overlay_w: i32 = 540;
+            let overlay_h: i32 = 400;
+            // Dim background
+            d.draw_rectangle(0, 0, W, H, raylib::color::Color { r: 0, g: 0, b: 0, a: 140 });
+            // Panel background
+            d.draw_rectangle(overlay_x, overlay_y, overlay_w, overlay_h, panel_bg);
+            d.draw_rectangle_lines(overlay_x, overlay_y, overlay_w, overlay_h, border);
+
+            match &picker {
+                PickerState::Load { entries, scroll, selected } => {
+                    d.draw_text("LOAD PROGRAM", overlay_x + 10, overlay_y + 8, 16, txt);
+                    d.draw_text("Up/Down=navigate  Enter=load  Esc=cancel", overlay_x + 10, overlay_y + 28, 10, txt_dim);
+                    let list_y = overlay_y + 50;
+                    let list_h = overlay_h - 68;
+                    let row_h: i32 = 36;
+                    let visible_rows = (list_h / row_h) as usize;
+                    // Clip area background
+                    d.draw_rectangle(overlay_x + 5, list_y, overlay_w - 10, list_h, raylib::color::Color { r: 10, g: 15, b: 10, a: 255 });
+                    for i in 0..visible_rows {
+                        let idx = *scroll as usize + i;
+                        if idx >= entries.len() { break; }
+                        let entry = &entries[idx];
+                        let row_y = list_y + i as i32 * row_h;
+                        let is_sel = idx == *selected as usize;
+                        if is_sel {
+                            d.draw_rectangle(overlay_x + 5, row_y, overlay_w - 10, row_h, raylib::color::Color { r: 0, g: 80, b: 40, a: 255 });
+                        }
+                        d.draw_text(&entry.name, overlay_x + 15, row_y + 4, 15, if is_sel { led_on } else { txt });
+                        // Truncate description to fit
+                        let desc_max_chars = ((overlay_w - 30) / 6) as usize;
+                        let desc: String = entry.description.chars().take(desc_max_chars).collect();
+                        d.draw_text(&desc, overlay_x + 15, row_y + 20, 10, txt_dim);
+                    }
+                    // Scroll indicators
+                    if *scroll > 0 {
+                        d.draw_text("  ^ more above ^", overlay_x + 10, list_y - 14, 9, txt_dim);
+                    }
+                    if (*scroll as usize + visible_rows) < entries.len() {
+                        d.draw_text("  v more below v", overlay_x + 10, list_y + list_h + 2, 9, txt_dim);
+                    }
+                    d.draw_text(&format!("{} / {} entries", selected + 1, entries.len()), overlay_x + 10, overlay_y + overlay_h - 18, 10, txt_dim);
+                }
+                PickerState::Save { filename, cursor_blink } => {
+                    d.draw_text("SAVE PROGRAM (Enter=save, Esc=cancel)", overlay_x + 10, overlay_y + 8, 13, txt);
+                    d.draw_text("Type a filename (saved to PROGRAMS/<name>.json)", overlay_x + 10, overlay_y + 28, 10, txt_dim);
+                    d.draw_text("Filename:", overlay_x + 10, overlay_y + 56, 14, txt);
+                    let input_y = overlay_y + 76;
+                    d.draw_rectangle(overlay_x + 10, input_y, overlay_w - 20, 30, raylib::color::Color { r: 10, g: 15, b: 10, a: 255 });
+                    d.draw_rectangle_lines(overlay_x + 10, input_y, overlay_w - 20, 30, border);
+                    let display_name = if *cursor_blink / 20 % 2 == 0 {
+                        format!("{}.json|", filename)
+                    } else {
+                        format!("{}.json ", filename)
+                    };
+                    d.draw_text(&display_name, overlay_x + 16, input_y + 6, 16, led_on);
+                    d.draw_text("Saves 256 bytes from address switches position", overlay_x + 10, overlay_y + 120, 10, txt_dim);
+                    let addr_val_display: u16 = addr_sw.iter().enumerate()
+                        .fold(0u16, |a, (i, &on)| if on { a | (1 << (15 - i)) } else { a });
+                    d.draw_text(&format!("Start address: {:04X}", addr_val_display), overlay_x + 10, overlay_y + 140, 14, txt);
+                    d.draw_text("Length: 256 bytes (0x100)", overlay_x + 10, overlay_y + 160, 14, txt);
+                }
+                PickerState::Closed => {}
+            }
+        }
+
+        // === End picker overlay ===
         let mem_y: i32 = 510;
         d.draw_text("MEMORY AT PC", lp_x + 10, mem_y, 12, txt_dim);
         let pc = emu.cpu.pc;
@@ -666,7 +864,7 @@ fn main() {
         d.draw_text(&format!("FLAGS: S{} Z{} AC{} P{} CY{}", f.s as u8, f.z as u8, f.ac as u8, f.p as u8, f.cy as u8), lp_x + 10, reg_y + 44, 10, txt_dim);
 
         // Help line at bottom
-        d.draw_text("F5:Run/Stop  F2:LoadProg  F3:SaveDump  R:Reset", lp_x + 10, H - 20, 11, txt_dim);
+        d.draw_text("F5:Run/Stop  F2:Load  F3:Save  R:Reset", lp_x + 10, H - 20, 11, txt_dim);
 
         drop(d);
     }
