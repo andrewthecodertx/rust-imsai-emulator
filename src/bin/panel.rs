@@ -4,10 +4,9 @@
 //! and function buttons. No ROM, no CP/M, just hardware.
 //!
 //! Usage:
-//!   imsai-gui                 Start with empty memory, front panel only
+//!   imsai-gui                 Start with empty memory (or saved state), front panel only
 //!   imsai-gui --program      Load a front panel program (.json)
 //!   imsai-gui --load <file> [addr]  Load binary at address (default 0x0000)
-//!   imsai-gui --disk <file>         Load disk image and boot CP/M
 
 use raylib::prelude::RaylibDraw;
 use std::env;
@@ -135,7 +134,6 @@ use raylib::math::Vector2;
 use raylib::text::RaylibFont;
 use rust_imsai_emulator::cards::PanelSwitch;
 use rust_imsai_emulator::Imsai8080;
-use rust_imsai_emulator::TarbellCard;
 use rust_imsai_emulator::save_memory_to_file;
 use rust_imsai_emulator::load_memory_from_file;
 use serde::{Deserialize, Serialize};
@@ -226,19 +224,12 @@ fn ctrl_col_x(i: usize) -> i32 {
 }
 
 
-/// CCP base address for CP/M 2.2 64K system.
-const CPMB: u16 = 0xE400;
-
 fn main() {
     let args: Vec<String> = env::args().collect();
     let _bare = args.contains(&"--bare".to_string()); // kept for backward compat
     let load_arg = args
         .iter()
         .position(|a| a == "--load")
-        .and_then(|i| args.get(i + 1).cloned());
-    let disk_arg = args
-        .iter()
-        .position(|a| a == "--disk")
         .and_then(|i| args.get(i + 1).cloned());
     let program_arg = args
         .iter()
@@ -254,7 +245,6 @@ fn main() {
         eprintln!("  (default)           Start with empty memory, STOPPED");
         eprintln!("  --bare              (same as default, kept for compatibility)");
         eprintln!("  --load <file> [addr] Load raw binary at address (default 0x0000)");
-        eprintln!("  --disk <file>       Load disk image and boot CP/M 2.2");
         eprintln!("  --program <file>    Load a front panel program (.json), STOPPED");
         eprintln!("  --help, -h          Show this help");
         return;
@@ -333,21 +323,6 @@ fn main() {
                 false
             }
         }
-    } else if let Some(ref path) = disk_arg {
-        match emu
-            .bus
-            .card_mut::<TarbellCard>()
-            .unwrap()
-            .insert_disk(0, path)
-        {
-            Ok(()) => {
-                boot_cpm(&mut emu);
-                // Start STOPPED at CCP entry point, user presses F5 to run
-                program_name = "CP/M 2.2".to_string();
-            }
-            Err(e) => eprintln!("Error loading disk '{}': {}", path, e),
-        }
-        true
     } else if let Some(ref path) = load_arg {
         let addr_idx = args.iter().position(|a| a == "--load").unwrap() + 2;
         let addr: u16 = args
@@ -376,7 +351,7 @@ fn main() {
                 Err(e) => eprintln!("Warning: failed to load {}: {}", MEMORY_FILE, e),
             }
         } else {
-            eprintln!("No program loaded. Use --program, --load, or --disk to load software.");
+            eprintln!("No program loaded. Use --program or --load to load software.");
         }
         false
     };
@@ -1765,65 +1740,5 @@ fn memory_to_program(
         description: description.to_string(),
         steps,
     }
-}
-
-/// Boot CP/M 2.2 from disk: load system tracks and install BIOS.
-fn boot_cpm(emu: &mut rust_imsai_emulator::Imsai8080) {
-    const BIOS_BASE: u16 = 0xFA00;
-    let mut mem_addr: u16 = CPMB;
-    let mut sectors_loaded: u16 = 0;
-
-    for track in 0..2u8 {
-        for sector in 1..=26u8 {
-            if track == 0 && sector == 1 {
-                continue;
-            }
-            let sector_data = match emu.bus.tarbell().get_disk(0) {
-                Some(disk) => match disk.read_sector(track, sector) {
-                    Ok(data) => data,
-                    Err(e) => {
-                        eprintln!("Error reading track {} sector {}: {}", track, sector, e);
-                        return;
-                    }
-                },
-                None => {
-                    eprintln!("No disk in drive 0");
-                    return;
-                }
-            };
-
-            if mem_addr >= BIOS_BASE {
-                continue;
-            }
-            let end = mem_addr as usize + sector_data.len();
-            if end > BIOS_BASE as usize {
-                let avail = (BIOS_BASE - mem_addr) as usize;
-                for j in 0..avail {
-                    emu.bus.memory().write(mem_addr + j as u16, sector_data[j]);
-                }
-                mem_addr = BIOS_BASE;
-                sectors_loaded += 1;
-                continue;
-            }
-            for j in 0..sector_data.len() {
-                emu.bus.memory().write(mem_addr + j as u16, sector_data[j]);
-            }
-            mem_addr += sector_data.len() as u16;
-            sectors_loaded += 1;
-        }
-    }
-
-    let bytes_loaded = mem_addr - CPMB;
-    eprintln!(
-        "Loaded {} sectors ({} bytes) into 0x{:04X}-0x{:04X}",
-        sectors_loaded,
-        bytes_loaded,
-        CPMB,
-        CPMB + bytes_loaded
-    );
-
-    rust_imsai_emulator::Bios::install_jump_table(&mut emu.bus);
-    emu.cpu.pc = CPMB;
-    emu.cpu.sp = 0x0000;
 }
 

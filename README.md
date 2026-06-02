@@ -1,14 +1,14 @@
 # IMSAI 8080 Emulator
 
-A Rust emulator for the IMSAI 8080 that boots CP/M 2.2 with a custom BIOS and Tarbell floppy controller. Includes a raylib front panel GUI with toggle switches, LEDs, and a console display.
+A Rust emulator for the IMSAI 8080 with a custom BIOS and Tarbell floppy controller. Includes a raylib front panel GUI with toggle switches, LEDs, and a console display.
 
 ![IMSAI 8080 front panel](docs/imsai-screenshot.png)
 
 ## What It Does
 
-Emulates the IMSAI 8080 hardware (CPU, memory, Tarbell disk controller, console I/O) and runs a CP/M 2.2 operating system from a disk image. The custom BIOS provides the 17 standard CP/M entry points, and the Tarbell FD1771 controller handles disk reads and writes.
+Emulates the IMSAI 8080 hardware: Intel 8080 CPU, 64KB RAM, Tarbell FD1771 floppy controller, and IMSAI SIO-2 serial board. Supports interactive terminal mode and a visual front panel GUI.
 
-**Current status**: Boots CP/M 2.2 to the `A>` prompt. Directory listing partially works. Program execution (.COM files) hit "Bad Sector" errors due to incompatibility between the z80pack BDOS binary and the Tarbell controller's sector numbering. A CP/M 2.2 system image assembled for the Tarbell controller is needed.
+**Current status**: Boots and runs programs loaded via `--load` or `--program`. Terminal mode provides interactive keyboard input and console output. Disk I/O and CP/M support are under development.
 
 ## Hardware Emulated
 
@@ -37,11 +37,10 @@ deletes the saved state).
 
 | Flag                     | Description                                      |
 | ------------------------ | ------------------------------------------------ |
-| (none)                   | Start with empty memory, STOPPED                |
-| `--bare`                 | Same as default (kept for compatibility)        |
-| `--load <file> [0xADDR]` | Load raw binary file at address                  |
-| `--disk <file>`          | Load disk image and boot CP/M 2.2                |
-| `--program <file>`       | Load and execute a front panel program (JSON)    |
+| (none)                   | Start with empty memory, STOPPED                  |
+| `--bare`                 | Same as default (kept for compatibility)          |
+| `--load <file> [0xADDR]` | Load raw binary file at address                    |
+| `--program <file>`       | Load and execute a front panel program (JSON)      |
 
 ### Front Panel Programs
 
@@ -99,13 +98,18 @@ cargo run --bin imsai-gui -- --program programs/hello-world.json
 ### Terminal Mode (CLI)
 
 ```bash
-cargo run --release -- <disk_image.img>
+cargo run --bin imsai-cli -- --program programs/hello-world.json
 ```
 
-Requires a CP/M 2.2 disk image (256,256 bytes, 77 tracks x 26 sectors x 128 bytes). The system tracks must contain CCP+BDOS assembled for addresses 0xE400/0xEC06 with the Tarbell controller ports.
+Interactive terminal mode with keyboard input and live console output. Memory state is persisted between sessions via `imsai_memory.json`.
 
 ```
-imsai-cli <disk_image.img> [OPTIONS]
+imsai-cli [OPTIONS]
+
+Mode (choose one):
+  --load <file> [addr]       Load raw binary at address (default 0x0000)
+  --program <file.json>      Load a front panel program (.json)
+  (no arguments)             Start with saved memory (or empty if first run)
 
 Options:
   (default)         Interactive terminal mode with keyboard input
@@ -115,44 +119,26 @@ Options:
   --diag, -d         Diagnostic mode (I/O log + region tracking)
   --step, -s         Step trace (first 500 instructions)
   --pctrace, -p      PC ring-buffer trace (last 8K instructions)
-  --script           Scripted mode (captures console output)
-  --cmd "text"       Pre-load keyboard input for scripted testing
+  --script            Scripted mode (captures console output)
+  --cmd "text"        Pre-load keyboard input for scripted testing
 ```
 
-## CP/M 2.2 Memory Map
-
-| Address | Contents                          |
-| ------- | --------------------------------- |
-| 0x0000  | Vectors (JMP WBOOT, JMP BDOS)     |
-| 0x0100  | TPA (Transient Program Area)      |
-| 0xE400  | CCP (loaded from disk image)      |
-| 0xEC00  | BDOS (loaded from disk image)     |
-| 0xF000  | BDOS data area                    |
-| 0xFA00  | Custom BIOS (17-entry jump table) |
-| 0xFB30  | DPH + DIRBUF + CSV + ALV          |
-
-## Terminal Mode Controls
+## Terminal Controls
 
 | Key       | Action                                  |
 | --------- | --------------------------------------- |
-| Letters   | Sent as uppercase to CP/M CONIN         |
+| Letters   | Sent as uppercase                      |
 | Enter     | Sends CR (0x0D)                         |
 | Backspace | Sends DEL (0x7F)                        |
 | Escape    | Sends ESC (0x1B)                        |
 | Ctrl+key  | Sends control character (Ctrl+C = 0x03) |
 | Ctrl+]    | Exit emulator                           |
 
-## BIOS
-
-The custom BIOS at 0xFA00 provides all 17 CP/M 2.2 entry points using Tarbell controller ports 0x48-0x4B and console ports 0x00-0x01. Disk parameter block matches the 8" SSSD format: 26 sectors/track, 1024-byte allocation blocks, 2 reserved tracks.
-
 ## Known Limitations
 
-- Only drive A: is functional
-- .COM program execution fails with "Bad Sector" due to BDOS sector numbering incompatibility
-- Write operations to disk are implemented but untested
 - Only 8" SSSD floppy format (77 tracks, 26 sectors, 128 bytes/sector)
 - No cycle-accurate timing
+- Serial I/O polling only (no interrupt-driven input)
 
 ## License
 

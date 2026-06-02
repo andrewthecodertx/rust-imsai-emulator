@@ -9,10 +9,8 @@ use crossterm::{
     ExecutableCommand,
 };
 
-use rust_imsai_emulator::TarbellCard;
-
-/// CCP base address for 64K CP/M 2.2 system
-const CPMB: u16 = 0xE400;
+use rust_imsai_emulator::save_memory_to_file;
+use rust_imsai_emulator::load_memory_from_file;
 
 /// A front panel program step (same format as the GUI uses).
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -120,10 +118,9 @@ fn print_usage(args: &Vec<String>) {
     eprintln!("Usage: {} [OPTIONS]", args.get(0).unwrap_or(&"imsai-cli".to_string()));
     eprintln!();
     eprintln!("Mode (choose one):");
-    eprintln!("  <disk_image.img>         Boot CP/M 2.2 from disk image");
-    eprintln!("  --load <file> [addr]     Load raw binary at address (default 0x0000)");
-    eprintln!("  --program <file.json>     Load a front panel program (.json)");
-    eprintln!("  (no arguments)           Start with empty memory (bare-metal)");
+    eprintln!("  --load <file> [addr]       Load raw binary at address (default 0x0000)");
+    eprintln!("  --program <file.json>      Load a front panel program (.json)");
+    eprintln!("  (no arguments)             Start with empty memory (bare-metal)");
     eprintln!();
     eprintln!("Options:");
     eprintln!("  --batch, -b         Batch mode (non-interactive, 50M instructions)");
@@ -167,20 +164,6 @@ fn main() {
         .and_then(|i| args.get(i + 1))
         .map(|s| s.to_string());
 
-    // First positional argument (not a flag or flag value) is the disk image
-    let mut flagged_values: Vec<String> = vec![];
-    for flag in &["--cmd", "--load", "--program"] {
-        if let Some(idx) = args.iter().position(|a| a == flag) {
-            if let Some(v) = args.get(idx + 1) { flagged_values.push(v.clone()); }
-            if *flag == "--load" { if let Some(v) = args.get(idx + 2) { flagged_values.push(v.clone()); } }
-        }
-    }
-    let disk_path = args.iter().skip(1)
-        .filter(|a| !a.starts_with('-'))
-        .filter(|a| !flagged_values.contains(a))
-        .next()
-        .map(|s| s.to_string());
-
     // --load address (optional, after the filename)
     let load_addr: u16 = if load_arg.is_some() {
         let load_idx = args.iter().position(|a| a == "--load").unwrap();
@@ -222,21 +205,18 @@ fn main() {
                 return;
             }
         }
-    } else if let Some(ref disk_file) = disk_path {
-        // Boot CP/M from disk image
-        match emu.bus.card_mut::<TarbellCard>().expect("Tarbell card")
-            .insert_disk(0, disk_file) {
-            Ok(()) => println!("Loaded disk: {}", disk_file),
-            Err(e) => {
-                eprintln!("Error loading disk '{}': {}", disk_file, e);
-                return;
-            }
-        }
-        boot_cpm(&mut emu);
     } else {
-        // Bare-metal: empty memory, no program loaded
-        eprintln!("IMSAI 8080 - Bare-metal mode (empty memory, no program loaded)");
-        eprintln!("Use --load <file> or --program <file.json> to load a program.");
+        // No program/load specified: restore saved memory if it exists
+        let mem_path = std::path::Path::new("imsai_memory.json");
+        if mem_path.exists() {
+            match load_memory_from_file(&mut emu.bus.memory().ram, mem_path) {
+                Ok(()) => eprintln!("Restored memory from {}", mem_path.display()),
+                Err(e) => eprintln!("Warning: failed to load {}: {}", mem_path.display(), e),
+            }
+        } else {
+            eprintln!("IMSAI 8080 - Bare-metal mode (empty memory, no program loaded)");
+            eprintln!("Use --load <file> or --program <file.json> to load a program.");
+        }
     }
 
     // Set start PC if we loaded something
@@ -267,65 +247,13 @@ fn main() {
     } else {
         run_terminal(&mut emu);
     }
-}
 
-fn boot_cpm(emu: &mut rust_imsai_emulator::Imsai8080) {
-    // CP/M 2.2 64K boot: load system tracks from disk image.
-    //
-    // The disk image must contain CCP+BDOS assembled for the 64K layout
-    // (CCP=0xE400, BDOS=0xEC06) on its first 2-3 tracks. We load the
-    // system tracks into memory, then install our own BIOS at 0xFA00.
-    const BIOS_BASE: u16 = 0xFA00;
-    let mut mem_addr: u16 = CPMB;
-    let mut sectors_loaded: u16 = 0;
-
-    for track in 0..2u8 {
-        for sector in 1..=26u8 {
-            if track == 0 && sector == 1 {
-                continue;
-            }
-            let sector_data = match emu.bus.tarbell().get_disk(0) {
-                Some(disk) => match disk.read_sector(track, sector) {
-                    Ok(data) => data,
-                    Err(e) => {
-                        eprintln!("Error reading track {} sector {}: {}", track, sector, e);
-                        return;
-                    }
-                },
-                None => {
-                    eprintln!("No disk in drive 0");
-                    return;
-                }
-            };
-
-            if mem_addr >= BIOS_BASE {
-                continue;
-            }
-            let end = mem_addr as usize + sector_data.len();
-            if end > BIOS_BASE as usize {
-                let avail = (BIOS_BASE - mem_addr) as usize;
-                for j in 0..avail {
-                    emu.bus.memory().write(mem_addr + j as u16, sector_data[j]);
-                }
-                mem_addr = BIOS_BASE;
-                sectors_loaded += 1;
-                continue;
-            }
-            for j in 0..sector_data.len() {
-                emu.bus.memory().write(mem_addr + j as u16, sector_data[j]);
-            }
-            mem_addr += sector_data.len() as u16;
-            sectors_loaded += 1;
-        }
+    // Save memory state on exit
+    let mem_path = std::path::Path::new("imsai_memory.json");
+    match save_memory_to_file(&emu.bus.memory().ram, mem_path) {
+        Ok(()) => eprintln!("Memory saved to {}", mem_path.display()),
+        Err(e) => eprintln!("Warning: failed to save {}: {}", mem_path.display(), e),
     }
-
-    let bytes_loaded = mem_addr - CPMB;
-    println!("Loaded {} sectors ({} bytes) into 0x{:04X}-0x{:04X}",
-        sectors_loaded, bytes_loaded, CPMB, CPMB + bytes_loaded);
-
-    rust_imsai_emulator::Bios::install_jump_table(&mut emu.bus);
-    emu.cpu.pc = CPMB;
-    emu.cpu.sp = 0x0000;
 }
 
 fn run_step_trace(emu: &mut rust_imsai_emulator::Imsai8080, max: u64) {
@@ -436,7 +364,6 @@ fn run_diag(emu: &mut rust_imsai_emulator::Imsai8080, max: u64) {
 }
 
 /// Interactive terminal mode: raw terminal, real-time keyboard input, live console output.
-/// This is the primary user-facing mode for running CP/M interactively.
 fn run_terminal(emu: &mut rust_imsai_emulator::Imsai8080) {
     // Try to enable raw mode; fall back to batch mode if no TTY
     if enable_raw_mode().is_err() {
@@ -453,7 +380,7 @@ fn run_terminal(emu: &mut rust_imsai_emulator::Imsai8080) {
     stdout.flush().ok();
 
     // Print welcome banner
-    print!("\r\nIMSAI 8080 - CP/M 2.2 Terminal\r\nPress Ctrl+] to exit\r\n---\r\n");
+    print!("\r\nIMSAI 8080 Terminal\r\nPress Ctrl+] to exit\r\n---\r\n");
     stdout.flush().ok();
 
     let batch_size: u64 = 5000;
@@ -506,7 +433,7 @@ fn run_terminal(emu: &mut rust_imsai_emulator::Imsai8080) {
                     Event::Key(key_event) => {
                         match key_event {
                             KeyEvent { code: KeyCode::Esc, .. } => {
-                                // Escape key: send ESC (0x1B) to CP/M
+                                // Escape key: send ESC (0x1B)
                                 emu.bus.console().type_text("\x1B");
                                 got_key = true;
                             }
@@ -529,9 +456,9 @@ fn run_terminal(emu: &mut rust_imsai_emulator::Imsai8080) {
                                 }
                             }
                             KeyEvent { code: KeyCode::Char(ch), .. } => {
-                                // Regular character: convert to uppercase for CP/M
+                                // Regular character: convert to uppercase
                                 let byte = if ch == '\n' || ch == '\r' {
-                                    0x0D_u8 // CR for CP/M
+                                    0x0D_u8 // CR
                                 } else {
                                     ch.to_ascii_uppercase() as u8
                                 };
@@ -559,7 +486,7 @@ fn run_terminal(emu: &mut rust_imsai_emulator::Imsai8080) {
                         }
                     }
                     Event::Resize(_, _) => {
-                        // Terminal resize - CP/M doesn't care
+                        // Terminal resize
                     }
                     _ => {} // Ignore mouse and other events
                 }
@@ -604,7 +531,7 @@ fn print_instructions_summary(count: u64, elapsed: std::time::Duration) {
 }
 
 fn run_interactive(emu: &mut rust_imsai_emulator::Imsai8080, max_instructions: u64) {
-    println!("IMSAI 8080 - CP/M 2.2 ({} instructions)", max_instructions);
+    println!("IMSAI 8080 ({} instructions)", max_instructions);
 
     let mut count: u64 = 0;
     loop {
