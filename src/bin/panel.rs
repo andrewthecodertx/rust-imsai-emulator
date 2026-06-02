@@ -212,9 +212,9 @@ const CTRL_X0: i32 = PX + 899; // center of first control paddle
 // Terminal dimensions
 const TERM_COLS: usize = 80;
 const TERM_ROWS: usize = 24;
-const TERM_CHAR_W: i32 = 10;
-const TERM_CHAR_H: i32 = 18;
-const TERM_FONT_SIZE: i32 = 16;
+const TERM_CHAR_W: i32 = 11;
+const TERM_CHAR_H: i32 = 20;
+const TERM_FONT_SIZE: i32 = 18;
 
 /// X center of address bit `i` (0 = MSB/bit15, 15 = LSB/bit0) in the LED/switch grid.
 fn addr_col_x(i: usize) -> i32 {
@@ -1126,14 +1126,23 @@ fn main() {
             state, cpu.pc, cpu.sp, cpu.a, cpu.b, cpu.c, cpu.d, cpu.e, cpu.h, cpu.l,
             program_name, cycles,
         );
-        d.draw_text(&line, 10, REF_H - 22, 14, txt_dim);
-        d.draw_text(
-            "F5 run/stop  F2 load  F3 save  R reset",
-            REF_W - 400,
-            REF_H - 22,
-            14,
-            txt_dim,
-        );
+        if let Some(f) = tf {
+            d.draw_text_ex(f, &line,
+                raylib::math::Vector2::new(10.0, (REF_H - 24) as f32),
+                14.0, 1.0, txt_dim);
+            d.draw_text_ex(f, "F5 run/stop  F2 load  F3 save  R reset",
+                raylib::math::Vector2::new((REF_W - 420) as f32, (REF_H - 24) as f32),
+                14.0, 1.0, txt_dim);
+        } else {
+            d.draw_text(&line, 10, REF_H - 22, 14, txt_dim);
+            d.draw_text(
+                "F5 run/stop  F2 load  F3 save  R reset",
+                REF_W - 400,
+                REF_H - 22,
+                14,
+                txt_dim,
+            );
+        }
 
         // === CRT Terminal display (below panel) ===
         let term_y: i32 = panel_bottom + 10;
@@ -1171,9 +1180,9 @@ fn main() {
         if let Some(f) = tf {
             d.draw_text_ex(f, "CONSOLE",
                 raylib::math::Vector2::new((term_x + 4) as f32, (term_y + 2) as f32),
-                15.0, 1.0, con_color);
+                17.0, 1.0, con_color);
         } else {
-            d.draw_text("CONSOLE", term_x + 4, term_y + 2, 14, con_color);
+            d.draw_text("CONSOLE", term_x + 4, term_y + 2, 16, con_color);
         }
 
         let term_text_y = term_y + 20;
@@ -1214,16 +1223,16 @@ fn main() {
         // === I/O log (right side of terminal area) ===
         let iolog_x = term_x + TERM_COLS as i32 * char_w + 20;
         if iolog_x + 160 < term_x + term_w {
-            let log_label_size = 14.0_f32;
-            let log_entry_size = 13.0_f32;
-            let log_line_h = if tf.is_some() { 17 } else { 15 };
+            let log_label_size = 16.0_f32;
+            let log_entry_size = 14.0_f32;
+            let log_line_h = if tf.is_some() { 19 } else { 16 };
             if let Some(f) = tf {
                 d.draw_text_ex(f, "I/O LOG",
                     raylib::math::Vector2::new(iolog_x as f32, (term_y + 4) as f32),
                     log_label_size, 1.0,
                     raylib::color::Color { r: 30, g: 80, b: 30, a: 180 });
             } else {
-                d.draw_text("I/O LOG", iolog_x, term_y + 4, 12,
+                d.draw_text("I/O LOG", iolog_x, term_y + 4, 14,
                     raylib::color::Color { r: 30, g: 80, b: 30, a: 180 });
             }
             let io_log = emu.panel.io_log();
@@ -1237,7 +1246,7 @@ fn main() {
                         raylib::math::Vector2::new(iolog_x as f32, (term_y + 18 + i as i32 * log_line_h) as f32),
                         log_entry_size, 1.0, txt_dim);
                 } else {
-                    d.draw_text(&text, iolog_x, term_y + 18 + i as i32 * 15, 11, txt_dim);
+                    d.draw_text(&text, iolog_x, term_y + 22 + i as i32 * 16, 13, txt_dim);
                 }
             }
         }
