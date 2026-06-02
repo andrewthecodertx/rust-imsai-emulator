@@ -15,8 +15,6 @@
 pub mod cards;
 /// Chip-level models (8251A UART, FD1771 FDC)
 pub mod chips;
-/// CP/M 2.2 BIOS implementation (17-call BIOS with Tarbell controller)
-pub mod bios;
 /// S-100 system bus
 pub mod bus;
 /// CP/M disk image creation and management
@@ -27,13 +25,8 @@ pub mod dpb;
 pub mod emulator;
 /// I/O subsystem (keyboard, video)
 pub mod io;
-/// Memory subsystem (64K RAM, internal to MemoryCard)
-pub mod memory;
-/// System components
-pub mod system;
 
 // Re-export the main components
-pub use bios::Bios;
 pub use bus::ImsaiBus;
 pub use cards::{Card, FrontPanel, IoEvent, MemoryCard, PanelLeds, PanelSwitch, RunState, SerialCard, TarbellCard};
 pub use cards::{save_memory_to_file, load_memory_from_file};
@@ -43,6 +36,3 @@ pub use disk::DiskImage;
 pub use emulator::Imsai8080;
 pub use io::Keyboard;
 pub use io::VideoDisplay;
-pub use memory::Memory;
-// Legacy re-exports for backward compatibility
-pub use io::TarbellController;

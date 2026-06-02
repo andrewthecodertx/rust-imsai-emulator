@@ -14,9 +14,7 @@
 //! The directory occupies the first two allocation blocks (2KB) of the
 //! data area, giving 64 directory entries.
 
-#![allow(dead_code)]
-
-use crate::dpb::{BLM, DRM, OFF, SPT, SECTOR_SIZE, TOTAL_TRACKS};
+use crate::dpb::{BLM, DRM, OFF, SPT, SECTOR_SIZE, SKEW_TABLE, TOTAL_TRACKS};
 
 /// Total disk image size in bytes (77 tracks * 26 sectors * 128 bytes)
 pub const DISK_SIZE: usize = TOTAL_TRACKS as usize * SPT as usize * SECTOR_SIZE;
@@ -30,9 +28,11 @@ const NUM_DIR_ENTRIES: usize = DRM as usize + 1;
 /// Directory allocation blocks (from AL0/AL1)
 /// AL0 = 0xC0 means blocks 0 and 1 are reserved for directory
 /// That gives us 2 * 1024 = 2048 bytes for directory = 64 entries of 32 bytes
+#[allow(dead_code)]
 const DIR_BLOCKS: usize = 2;
 
 /// Directory size in bytes
+#[allow(dead_code)]
 const DIR_SIZE: usize = DIR_BLOCKS * SECTOR_SIZE * (BLM as usize + 1);
 
 /// Byte offset where the data area begins (after reserved tracks)
@@ -260,6 +260,7 @@ impl DiskImage {
     }
 
     /// Calculate the allocation block number from a byte offset in the data area
+    #[allow(dead_code)]
     fn byte_to_alloc_block(offset: usize) -> u16 {
         (offset / SECTOR_SIZE) as u16
     }
@@ -297,10 +298,6 @@ impl DiskImage {
 /// The 6:1 interleave is the standard for the Tarbell controller with
 /// IBM 3740 format disks. Physical sectors are numbered 1-26.
 pub fn logical_to_physical(logical: u8) -> u8 {
-    const SKEW_TABLE: [u8; 26] = [
-        1, 7, 13, 19, 25, 5, 11, 17, 23, 3, 9, 15, 21, 2, 8, 14, 20, 26, 6, 12, 18, 24, 4,
-        10, 16, 22,
-    ];
     if (logical as usize) < SKEW_TABLE.len() {
         SKEW_TABLE[logical as usize]
     } else {
@@ -309,11 +306,8 @@ pub fn logical_to_physical(logical: u8) -> u8 {
 }
 
 /// Convert a physical sector number (1-26) to a CP/M logical sector number (0-25)
+#[allow(dead_code)]
 fn physical_to_logical(physical: u8) -> u8 {
-    const SKEW_TABLE: [u8; 26] = [
-        1, 7, 13, 19, 25, 5, 11, 17, 23, 3, 9, 15, 21, 2, 8, 14, 20, 26, 6, 12, 18, 24, 4,
-        10, 16, 22,
-    ];
     for (logical, &phys) in SKEW_TABLE.iter().enumerate() {
         if phys == physical {
             return logical as u8;

@@ -31,6 +31,7 @@ const CMD_DTR: u8 = 0x02;
 const CMD_RX_ENABLE: u8 = 0x04;
 const CMD_SEND_BREAK: u8 = 0x08;
 const CMD_RESET: u8 = 0x40; // Internal reset (not power-on reset)
+#[allow(dead_code)]
 const CMD_HUNT: u8 = 0x80;
 
 /// 8251A status register bits
@@ -40,7 +41,9 @@ const STATUS_TX_EMPTY: u8 = 0x04;
 const STATUS_PARITY_ERR: u8 = 0x08;
 const STATUS_OVERRUN_ERR: u8 = 0x10;
 const STATUS_FRAMING_ERR: u8 = 0x20;
+#[allow(dead_code)]
 const STATUS_SYNC_DET: u8 = 0x40;
+#[allow(dead_code)]
 const STATUS_DSR: u8 = 0x80;
 
 /// Internal state for the 8251A programming sequence.
@@ -59,34 +62,48 @@ pub enum UartState {
 /// In a real 8251A this affects RX sampling and DRQ timing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BaudDivisor {
+    /// Sync mode (1x)
     Sync = 1,
+    /// 16x oversampling
     X16 = 16,
+    /// 64x oversampling
     X64 = 64,
 }
 
 /// Character length in bits (5, 6, 7, or 8).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CharLength {
+    /// 5 bits per character
     Bits5 = 5,
+    /// 6 bits per character
     Bits6 = 6,
+    /// 7 bits per character
     Bits7 = 7,
+    /// 8 bits per character
     Bits8 = 8,
 }
 
 /// Parity generation/checking.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Parity {
+    /// No parity bit
     None,
+    /// Even parity
     Even,
+    /// Odd parity
     Odd,
 }
 
 /// Stop bit configuration for async mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StopBits {
-    Invalid, // 5-bit chars with 1.5 stop bits (we treat same as 1)
+    /// Invalid config (5-bit with 1.5 stop bits, treated same as One)
+    Invalid,
+    /// 1 stop bit
     One,
+    /// 1.5 stop bits
     OneAndHalf,
+    /// 2 stop bits
     Two,
 }
 
@@ -429,14 +446,17 @@ impl Uart8251 {
         self.baud_divisor
     }
 
+    /// Get the configured character length.
     pub fn char_length(&self) -> CharLength {
         self.char_length
     }
 
+    /// Get the configured parity mode.
     pub fn parity(&self) -> Parity {
         self.parity
     }
 
+    /// Get the configured stop bits.
     pub fn stop_bits(&self) -> StopBits {
         self.stop_bits
     }

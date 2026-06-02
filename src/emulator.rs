@@ -11,7 +11,9 @@
 //! loader.
 
 use crate::bus::ImsaiBus;
-use crate::cards::{FrontPanel, PanelSwitch, RunState};
+use crate::cards::FrontPanel;
+#[cfg(test)]
+use crate::cards::PanelSwitch;
 use intel8080::Cpu8080;
 
 /// The IMSAI 8080 emulator system
@@ -69,11 +71,11 @@ impl Imsai8080 {
 
         if op_byte == 0xD3 {
             // OUT port,A
-            let port = self.bus.mem_read(pc_before + 1);
+            let port = self.bus.mem_read(pc_before.wrapping_add(1));
             self.panel.log_io_write(self.cpu.cycles, port, self.cpu.a);
         } else if op_byte == 0xDB {
             // IN A,port
-            let port = self.bus.mem_read(pc_before + 1);
+            let port = self.bus.mem_read(pc_before.wrapping_add(1));
             self.panel.log_io_read(self.cpu.cycles, port, self.cpu.a);
         }
 

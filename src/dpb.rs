@@ -49,6 +49,16 @@ pub const BLOCK_SIZE: usize = 1024;
 pub const RESERVED_TRACKS: u8 = 2;
 /// Total tracks per disk
 pub const TOTAL_TRACKS: u8 = 77;
+
+/// Standard IBM 3740 6:1 interleave skew table (logical-to-physical sector mapping)
+///
+/// Maps logical sector numbers 0-25 to physical sector numbers 1-26.
+/// This is the canonical single source of truth for the Tarbell controller
+/// sector translation. Used by both `disk.rs` and any CP/M BIOS implementation.
+pub const SKEW_TABLE: [u8; 26] = [
+    1, 7, 13, 19, 25, 5, 11, 17, 23, 3, 9, 15, 21, 2, 8, 14, 20, 26, 6, 12, 18, 24, 4,
+    10, 16, 22,
+];
 /// Directory entries
 pub const DIRECTORY_ENTRIES: u16 = DRM + 1;
 /// Allocation blocks

@@ -26,6 +26,8 @@
 //! This is what makes it useful as a hardware debugger: it can examine
 //! and deposit memory even if nothing works (no CPU, no firmware, nothing).
 
+use std::collections::VecDeque;
+
 /// Front panel function switches.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PanelSwitch {
@@ -88,7 +90,7 @@ pub enum RunState {
 /// When the panel is in RUN mode, it watches all bus transactions.
 /// This lets you see what the CPU is doing: which addresses it reads,
 /// which I/O ports it accesses, etc.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct IoEvent {
     /// Cycle count when this event happened
     pub cycle: u64,
@@ -126,7 +128,7 @@ pub struct FrontPanel {
     /// Pending switch actions (pressed since last update)
     pending_actions: Vec<PanelSwitch>,
     /// Circular buffer of recent I/O events for monitoring
-    io_log: Vec<IoEvent>,
+    io_log: VecDeque<IoEvent>,
     /// Maximum number of I/O events to keep
     io_log_capacity: usize,
     /// Total bus cycles seen while running
@@ -152,7 +154,7 @@ impl FrontPanel {
             leds: PanelLeds::default(),
             run_state: RunState::Stopped,
             pending_actions: Vec::new(),
-            io_log: Vec::new(),
+            io_log: VecDeque::new(),
             io_log_capacity: 256,
             cycle_count: 0,
             last_address: 0,
@@ -228,8 +230,8 @@ impl FrontPanel {
     }
 
     /// Get recent I/O events logged while the CPU was running.
-    pub fn io_log(&self) -> &[IoEvent] {
-        &self.io_log
+    pub fn io_log(&self) -> Vec<IoEvent> {
+        self.io_log.iter().copied().collect()
     }
 
     /// Clear the I/O event log.
@@ -256,9 +258,9 @@ impl FrontPanel {
         self.leds.iow = false;
 
         if self.io_log.len() >= self.io_log_capacity {
-            self.io_log.remove(0);
+            self.io_log.pop_front();
         }
-        self.io_log.push(IoEvent {
+        self.io_log.push_back(IoEvent {
             cycle,
             address: port as u16,
             data: value,
@@ -279,9 +281,9 @@ impl FrontPanel {
         self.leds.mwrt = false; // I/O write, not memory write
 
         if self.io_log.len() >= self.io_log_capacity {
-            self.io_log.remove(0);
+            self.io_log.pop_front();
         }
-        self.io_log.push(IoEvent {
+        self.io_log.push_back(IoEvent {
             cycle,
             address: port as u16,
             data: value,
@@ -452,7 +454,7 @@ impl FrontPanel {
         self.address_switches = cpu.pc; // Update switches to show new address
 
         // Log this step
-        self.io_log.push(IoEvent {
+        self.io_log.push_back(IoEvent {
             cycle: cpu.cycles,
             address: pc_before,
             data: bus.mem_read(pc_before),
@@ -513,6 +515,7 @@ fn u8_to_bool_array(val: u8) -> [bool; 8] {
     arr
 }
 
+#[allow(dead_code)]
 fn bool_array_to_u16(arr: [bool; 16]) -> u16 {
     let mut val: u16 = 0;
     for i in 0..16 {
@@ -523,6 +526,7 @@ fn bool_array_to_u16(arr: [bool; 16]) -> u16 {
     val
 }
 
+#[allow(dead_code)]
 fn bool_array_to_u8(arr: [bool; 8]) -> u8 {
     let mut val: u8 = 0;
     for i in 0..8 {

@@ -376,9 +376,9 @@ fn main() {
             }
         }
     } else if let Some(ref path) = load_arg {
-        let addr_idx = args.iter().position(|a| a == "--load").unwrap() + 2;
+        let load_pos = args.iter().position(|a| a == "--load").unwrap_or(0);
         let addr: u16 = args
-            .get(addr_idx)
+            .get(load_pos + 2)
             .and_then(|s| u16::from_str_radix(s.trim_start_matches("0x"), 16).ok())
             .unwrap_or(0);
         match std::fs::read(path) {

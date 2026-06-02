@@ -173,8 +173,8 @@ fn main() {
 
     // --load address (optional, after the filename)
     let load_addr: u16 = if load_arg.is_some() {
-        let load_idx = args.iter().position(|a| a == "--load").unwrap();
-        args.get(load_idx + 2)
+        let load_pos = args.iter().position(|a| a == "--load").unwrap_or(0);
+        args.get(load_pos + 2)
             .and_then(|s| u16::from_str_radix(s.trim_start_matches("0x").trim_start_matches("0X"), 16).ok())
             .unwrap_or(0)
     } else {
@@ -1381,124 +1381,6 @@ fn run_verbose_trace(emu: &mut rust_imsai_emulator::Imsai8080, max: u64) {
     println!("\nStopped at PC=0x{:04X} after {} instructions", emu.cpu.pc, count);
 }
 
-/// Hybrid test: runs at full speed with periodic display flush and I/O logging.
-/// Goal: quickly determine if *any* console or disk I/O is happening.
-///
-/// Also serves as a "console output test" — if no OUT to video ports,
-/// the problem is not in BIOS but in the program not running.
-#[allow(dead_code)]
-fn run_hybrid_test(emu: &mut rust_imsai_emulator::Imsai8080, max_instructions: u64) {
-    println!("=== HYBRID TEST ({} instructions) ===", max_instructions);
-    println!("Running at full speed with periodic flushes...");
-
-    let mut count: u64 = 0;
-    let mut video_chars: Vec<char> = Vec::new();
-    let mut io_events: Vec<(u64, char, u8, u8)> = Vec::new(); // (count, dir, port, value)
-    let mut last_console_out: u64 = 0;
-    let mut last_disk_out: u64 = 0;
-    let flush_interval: u64 = 10000;
-
-    // Track whether we've *ever* seen output to console or disk
-    let mut ever_saw_console_out: bool = false;
-    let mut ever_saw_disk_out: bool = false;
-
-    loop {
-        // Step batches of 1000 and flush video buffer periodically
-        for _ in 0..flush_interval {
-            let pc = emu.cpu.pc;
-            let op = emu.bus.mem_read(pc);
-
-            emu.step();
-            count += 1;
-
-            // Monitor I/O
-            if op == 0xD3 {
-                let port = emu.bus.mem_read(pc + 1);
-                let val = emu.cpu.a;
-                if port == 0x00 || port == 0x01 {
-                    io_events.push((count, 'O', port, val));
-                    last_console_out = count;
-                    if port == 0x00 && val >= 32 && val < 127 {
-                        video_chars.push(val as char);
-                        ever_saw_console_out = true;
-                    }
-                } else if (0x48..=0x4B).contains(&port) || (0xF8..0xFD).contains(&port) {
-                    io_events.push((count, 'O', port, val));
-                    last_disk_out = count;
-                    ever_saw_disk_out = true;
-                }
-            } else if op == 0xDB {
-                let port = emu.bus.mem_read(pc + 1);
-                if (0x48..=0x4B).contains(&port) || (0xF8..0xFD).contains(&port) {
-                    io_events.push((count, 'I', port, emu.cpu.a));
-                }
-            }
-
-            if emu.cpu.halted || count >= max_instructions {
-                break;
-            }
-        }
-
-        // Flush display every flush_interval steps (or if HLT)
-        let display = emu.bus.console().video().get_display_string();
-        for c in display.chars().filter(|c| *c != ' ') {
-            video_chars.push(c);
-            ever_saw_console_out = true;
-        }
-
-        // Print I/O activity summary
-        if last_console_out > 0 && count - last_console_out <= flush_interval {
-            let recent_video: String = video_chars.iter().skip(video_chars.len().saturating_sub(40)).collect();
-            println!("[console @ {:8}] PC=0x{:04X} A=0x{:02X} video='{}'", last_console_out, emu.cpu.pc, 
-                io_events.last().map_or(0,|e|if e.1=='O' {e.3}else{0}), recent_video);
-            video_chars.clear();
-        }
-        if last_disk_out > 0 && count - last_disk_out <= flush_interval {
-            println!("[disk    @ {:8}] PC=0x{:04X}", last_disk_out, emu.cpu.pc);
-        }
-
-        if emu.cpu.halted || count >= max_instructions {
-            break;
-        }
-    }
-
-    println!("\n=== HYBRID TEST RESULTS ===");
-    println!("Finished {} instructions at PC=0x{:04X}", count, emu.cpu.pc);
-    println!("I/O events: {} ({} OUT, {} IN)", io_events.len(),
-        io_events.iter().filter(|e| e.1 == 'O').count(),
-        io_events.iter().filter(|e| e.1 == 'I').count());
-    println!("Ever saw console output: {}", ever_saw_console_out);
-    println!("Ever saw disk output: {}", ever_saw_disk_out);
-
-    let final_display: String = video_chars.iter().collect();
-    if !final_display.is_empty() {
-        println!("\nFinal display content:\n---\n{}\n---", final_display);
-    } else {
-        println!("\n(no visible display output captured)");
-    }
-
-    // Show first/last console OUT
-    let console_outs: Vec<_> = io_events.iter().filter(|e| e.2 == 0x00 || e.2 == 0x01).collect();
-    if !console_outs.is_empty() {
-        println!("\nFirst console OUT: {:8} A=0x{:02X} ('{}')",
-            console_outs.first().unwrap().0, console_outs.first().unwrap().2, console_outs.first().unwrap().3 as char);
-        println!("Last  console OUT: {:8} A=0x{:02X} ('{}')",
-            console_outs.last().unwrap().0, console_outs.last().unwrap().2, console_outs.last().unwrap().3 as char);
-    } else {
-        println!("\n(no console OUT detected)");
-    }
-
-    // Show first/last disk I/O (Tarbell 0x48–0x4B)
-    let tarbell_outs: Vec<_> = io_events.iter().filter(|e| (0x48..=0x4B).contains(&e.2)).collect();
-    if !tarbell_outs.is_empty() {
-        println!("\nFirst Tarbell OUT: {:8} port=0x{:02X} A=0x{:02X}",
-            tarbell_outs.first().unwrap().0, tarbell_outs.first().unwrap().2, tarbell_outs.first().unwrap().3);
-        println!("Last  Tarbell OUT: {:8} port=0x{:02X} A=0x{:02X}",
-            tarbell_outs.last().unwrap().0, tarbell_outs.last().unwrap().2, tarbell_outs.last().unwrap().3);
-    } else {
-        println!("\n(no Tarbell 0x48–0x4B OUT detected)");
-    }
-}
 /// No terminal raw mode needed, just pure batch execution with I/O interception.
 fn run_scripted(emu: &mut rust_imsai_emulator::Imsai8080, cmd: Option<&str>, max_instructions: u64) {
     // Disable video rendering (we capture console output directly)

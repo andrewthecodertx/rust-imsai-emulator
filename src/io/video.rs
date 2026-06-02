@@ -130,7 +130,7 @@ impl VideoDisplay {
         }
 
         // Flush output
-        io::stdout().flush().unwrap();
+        let _ = io::stdout().flush();
     }
 
     /// Get the current display as a string

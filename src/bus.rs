@@ -36,7 +36,7 @@ impl ImsaiBus {
     /// Load a block of data into memory at the given address.
     pub fn load(&mut self, start: u16, data: &[u8]) {
         for (i, &byte) in data.iter().enumerate() {
-            self.mem_write(start + i as u16, byte);
+            self.mem_write(start.wrapping_add(i as u16), byte);
         }
     }
 

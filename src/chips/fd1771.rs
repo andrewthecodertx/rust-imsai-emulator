@@ -60,34 +60,26 @@ const S_WR_PROT: u8 = 0x40; // Bit 6: Write protect (Type II write)
 // ---------------------------------------------------------------------------
 // Command register bit fields
 // ---------------------------------------------------------------------------
-
-/// Command constants for reference (values are base commands without flag bits)
+// Command constants for reference (values are base commands without flag bits)
 #[allow(dead_code)]
-const CMD_RESTORE: u8 = 0x00; // 0000vVVR (V=verify, r=step rate)
-#[allow(dead_code)]
-const CMD_SEEK: u8 = 0x10; // 0001vVVR
-#[allow(dead_code)]
-const CMD_STEP: u8 = 0x20; // 0010uVVR (u=update track, same direction)
-#[allow(dead_code)]
-const CMD_STEP_IN: u8 = 0x40; // 0100uVVR
-#[allow(dead_code)]
-const CMD_STEP_OUT: u8 = 0x60; // 0110uVVR
-#[allow(dead_code)]
-const CMD_READ_SECTOR: u8 = 0x80;  // 100mSEEE (m=multiple, S=side, E=drive select)
-#[allow(dead_code)]
-const CMD_WRITE_SECTOR: u8 = 0xA0; // 101mSEEE
-#[allow(dead_code)]
-const CMD_READ_ADDRESS: u8 = 0xC0;
-#[allow(dead_code)]
-const CMD_READ_TRACK: u8 = 0xE0;
-#[allow(dead_code)]
-const CMD_WRITE_TRACK: u8 = 0xF0;
-#[allow(dead_code)]
-const CMD_FORCE_INTERRUPT: u8 = 0xD0;
+mod cmd {
+    pub const RESTORE: u8 = 0x00; // 0000vVVR (V=verify, r=step rate)
+    pub const SEEK: u8 = 0x10; // 0001vVVR
+    pub const STEP: u8 = 0x20; // 0010uVVR (u=update track, same direction)
+    pub const STEP_IN: u8 = 0x40; // 0100uVVR
+    pub const STEP_OUT: u8 = 0x60; // 0110uVVR
+    pub const READ_SECTOR: u8 = 0x80;  // 100mSEEE (m=multiple, S=side, E=drive select)
+    pub const WRITE_SECTOR: u8 = 0xA0; // 101mSEEE
+    pub const READ_ADDRESS: u8 = 0xC0;
+    pub const READ_TRACK: u8 = 0xE0;
+    pub const WRITE_TRACK: u8 = 0xF0;
+    pub const FORCE_INTERRUPT: u8 = 0xD0;
+}
 
 // ---------------------------------------------------------------------------
 // FD1771 internal state machine
 // ---------------------------------------------------------------------------
+/// FD1771 internal state machine.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FdcState {
     /// Idle, waiting for command
@@ -622,7 +614,7 @@ impl Fd1771 {
 
         match self.current_disk_mut() {
             Some(disk) => {
-                if let Err(_) = disk.write_sector(track, sector, &data) {
+                if disk.write_sector(track, sector, &data).is_err() {
                     self.status_reg |= S_WRITE_PROTECT;
                 } else {
                     self.status_reg &= !S_WRITE_PROTECT;
