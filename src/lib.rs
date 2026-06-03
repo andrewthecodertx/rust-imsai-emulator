@@ -17,9 +17,9 @@ pub mod cards;
 pub mod chips;
 /// S-100 system bus
 pub mod bus;
-/// CP/M-compatible disk image creation and management
+/// Disk image management for the Tarbell controller
 pub mod disk;
-/// Disk parameter block definitions
+/// Disk parameter constants (Tarbell 8-inch floppy format)
 pub mod dpb;
 /// The main emulator system
 pub mod emulator;

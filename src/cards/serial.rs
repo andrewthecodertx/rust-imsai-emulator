@@ -162,18 +162,6 @@ impl SerialCard {
             }
         }
     }
-
-    /// Get the current track register from the FD1771 (for diagnostics).
-    /// This delegates to the Tarbell card, not the serial card,
-    /// but is kept here for backward compatibility.
-    pub fn current_track(&self) -> u8 {
-        0 // Serial card has no track register
-    }
-
-    /// Get the current sector register value from the FD1771
-    pub fn current_sector(&self) -> u8 {
-        0
-    }
 }
 
 impl Default for SerialCard {
