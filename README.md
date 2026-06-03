@@ -138,7 +138,7 @@ Options:
 - Only 8" SSSD floppy format (77 tracks, 26 sectors, 128 bytes/sector)
 - No cycle-accurate timing
 - Serial I/O polling only (no interrupt-driven input)
-- No CP/M boot path (BIOS not yet implemented)
+- No CP/M support (needs a compatible CCP+BDOS image for the Tarbell controller)
 
 ## License
 
