@@ -94,9 +94,8 @@ impl SerialCard {
     /// (e.g., raylib panel) where you manage TX output yourself via
     /// `channel_a_mut().take_output()`.
     pub fn poll_keyboard(&mut self) {
-        if self.channel_a.is_rx_enabled() && self.keyboard.is_char_ready() {
-            let ch = self.keyboard.read_char();
-            if ch != 0 {
+        if self.channel_a.is_rx_enabled() {
+            if let Some(ch) = self.keyboard.read_char() {
                 self.channel_a.inject_rx_byte(ch);
             }
         }
@@ -113,9 +112,8 @@ impl SerialCard {
     /// Called from the I/O read path so TxRDY polling works during execution.
     pub fn service_uart(&mut self) {
         // Inject keyboard input without reprogramming the UART
-        if self.channel_a.is_rx_enabled() && self.keyboard.is_char_ready() {
-            let ch = self.keyboard.read_char();
-            if ch != 0 {
+        if self.channel_a.is_rx_enabled() {
+            if let Some(ch) = self.keyboard.read_char() {
                 self.channel_a.inject_rx_byte(ch);
             }
         }
@@ -135,10 +133,8 @@ impl SerialCard {
     /// `take_output()` instead.
     pub fn poll_rx(&mut self) {
         // Transfer keyboard chars to the 8251A UART RX buffer
-        if self.channel_a.is_rx_enabled() && self.keyboard.is_char_ready() {
-            let ch = self.keyboard.read_char();
-            // Inject directly without reprogramming the UART.
-            if ch != 0 {
+        if self.channel_a.is_rx_enabled() {
+            if let Some(ch) = self.keyboard.read_char() {
                 self.channel_a.inject_rx_byte(ch);
             }
         }

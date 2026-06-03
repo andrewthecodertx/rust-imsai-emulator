@@ -33,10 +33,11 @@ impl Keyboard {
         !self.buffer.is_empty() && self.position < self.buffer.len()
     }
 
-    /// Read a character from the keyboard
-    /// Returns 0 if no character is available (non-blocking).
-    /// Callers should check is_char_ready() first to avoid reading 0.
-    pub fn read_char(&mut self) -> u8 {
+    /// Read a character from the keyboard.
+    /// Returns `Some(byte)` if available, `None` if the buffer is empty.
+    /// Unlike the old `read_char() -> u8` which returned 0 for "no data"
+    /// (ambiguous with a NUL byte), this disambiguates the two cases.
+    pub fn read_char(&mut self) -> Option<u8> {
         if self.position < self.buffer.len() {
             let ch = self.buffer[self.position];
             self.position += 1;
@@ -45,9 +46,9 @@ impl Keyboard {
                 self.buffer.clear();
                 self.position = 0;
             }
-            ch
+            Some(ch)
         } else {
-            0
+            None
         }
     }
 
@@ -77,7 +78,22 @@ mod tests {
         keyboard.type_text("Hello");
         assert!(keyboard.is_char_ready());
 
-        assert_eq!(keyboard.read_char(), b'H');
-        assert_eq!(keyboard.read_char(), b'e');
+        assert_eq!(keyboard.read_char(), Some(b'H'));
+        assert_eq!(keyboard.read_char(), Some(b'e'));
+    }
+
+    #[test]
+    fn test_keyboard_returns_none_when_empty() {
+        let mut keyboard = Keyboard::new();
+        assert_eq!(keyboard.read_char(), None);
+    }
+
+    #[test]
+    fn test_keyboard_nul_byte_roundtrip() {
+        let mut keyboard = Keyboard::new();
+        keyboard.type_text("\x00A");
+        assert_eq!(keyboard.read_char(), Some(0));
+        assert_eq!(keyboard.read_char(), Some(b'A'));
+        assert_eq!(keyboard.read_char(), None);
     }
 }

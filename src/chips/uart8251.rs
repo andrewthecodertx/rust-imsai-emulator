@@ -360,8 +360,7 @@ impl Uart8251 {
         }
         if self.rx_data.is_none() {
             if let Some(ref mut kbd) = self.keyboard {
-                if kbd.is_char_ready() {
-                    let ch = kbd.read_char();
+                if let Some(ch) = kbd.read_char() {
                     self.rx_data = Some(ch);
                     self.status |= STATUS_RX_READY;
                 }
