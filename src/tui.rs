@@ -194,7 +194,7 @@ fn run_command(
                     emu.cpu.pc = addr;
                     emu.cpu.halted = false;
                     *program_name = path.to_string();
-                    close(format!("Loaded {} bytes at 0x{:04X}", data.len(), addr))
+                    CommandResult { close: true, ran: true, message: format!("Loaded {} bytes at 0x{:04X}", data.len(), addr) }
                 }
                 Err(e) => stay(format!("Error: {}", e)),
             }
@@ -214,7 +214,7 @@ fn run_command(
                             emu.cpu.pc = start;
                             emu.cpu.halted = false;
                             *program_name = prog.name.clone();
-                            close(format!("Running {} (PC={:04X})...", prog.name, start))
+                            CommandResult { close: true, ran: true, message: format!("Running {} (PC={:04X})...", prog.name, start) }
                         }
                         Err(e) => stay(format!("Program error: {}", e)),
                     }
@@ -233,8 +233,11 @@ fn run_command(
             }
         }
         "go" | "run" => {
+            if emu.panel.is_stopped() {
+                emu.panel.press_switch(rust_imsai_emulator::cards::PanelSwitch::RunStop);
+            }
             emu.cpu.halted = false;
-            close("Resuming execution. Press Ctrl+K to pause.".to_string())
+            CommandResult { close: true, ran: true, message: "Resuming execution. Press Ctrl+K to pause.".to_string() }
         }
         "reset" => {
             *emu = rust_imsai_emulator::Imsai8080::new();
@@ -282,20 +285,19 @@ pub fn run_terminal(emu: &mut rust_imsai_emulator::Imsai8080) {
     let mut instruction_count: u64 = 0;
     let mut idle_count: u64 = 0;
     let mut last_display: String = String::new();
-    let mut running = true;
     let start_time = Instant::now();
 
-    loop {
-        if running && !emu.cpu.halted {
-            for _ in 0..batch_size {
-                emu.step();
-                instruction_count += 1;
-                emu.bus.serial().poll_rx();
+    // Start in RUN mode (program already loaded and PC set)
+    if emu.panel.is_stopped() {
+        emu.panel.press_switch(rust_imsai_emulator::cards::PanelSwitch::RunStop);
+        emu.process_panel();
+    }
 
-                if emu.cpu.halted {
-                    break;
-                }
-            }
+    loop {
+        if emu.panel.is_running() && !emu.cpu.halted {
+            let count = emu.run_batch(batch_size);
+            instruction_count += count;
+            emu.bus.serial().poll_rx();
         }
 
         let display = emu.bus.console().video().get_display_string();
@@ -315,7 +317,7 @@ pub fn run_terminal(emu: &mut rust_imsai_emulator::Imsai8080) {
                 row += 1;
             }
 
-            render_bottom_row(emu, &program_name, BottomMode::Status, running, "", None);
+            render_bottom_row(emu, &program_name, BottomMode::Status, emu.panel.is_running(), "", None);
             stdout.flush().ok();
         }
 
@@ -330,7 +332,8 @@ pub fn run_terminal(emu: &mut rust_imsai_emulator::Imsai8080) {
                                 got_key = true;
                             }
                             KeyEvent { code: KeyCode::F(5), .. } => {
-                                running = !running;
+                                emu.panel.press_switch(rust_imsai_emulator::cards::PanelSwitch::RunStop);
+                                emu.process_panel();
                                 last_display.clear();
                                 got_key = true;
                             }
@@ -347,8 +350,11 @@ pub fn run_terminal(emu: &mut rust_imsai_emulator::Imsai8080) {
                                 return;
                             }
                             KeyEvent { code: KeyCode::Char('k'), modifiers: KeyModifiers::CONTROL, .. } => {
-                                if run_command_modal(emu, &mut stdout, &mut program_name) {
-                                    running = true;
+                                let ran_something = run_command_modal(emu, &mut stdout, &mut program_name);
+                                emu.process_panel();
+                                if ran_something && emu.panel.is_stopped() {
+                                    emu.panel.press_switch(rust_imsai_emulator::cards::PanelSwitch::RunStop);
+                                    emu.process_panel();
                                 }
                                 last_display.clear();
                                 got_key = true;
