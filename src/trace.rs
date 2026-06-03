@@ -164,11 +164,17 @@ pub fn run_diag(emu: &mut Imsai8080, max: u64) {
 /// Full trace: run N instructions with no per-instruction output.
 pub fn run_trace(emu: &mut Imsai8080, max: u64) {
     println!("Tracing {} instructions from PC=0x{:04X}...", max, emu.cpu.pc);
+
+    if emu.panel.is_stopped() {
+        emu.panel.press_switch(rust_imsai_emulator::PanelSwitch::RunStop);
+        emu.process_panel();
+    }
+
     let mut count: u64 = 0;
     loop {
-        emu.step();
-        count += 1;
-        if emu.cpu.halted || count >= max {
+        let batch = emu.run_batch(1000.min(max - count));
+        count += batch;
+        if batch == 0 || count >= max {
             break;
         }
     }
