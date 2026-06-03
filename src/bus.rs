@@ -1,15 +1,6 @@
-//! S-100 system bus implementation for the IMSAI 8080 emulator
+//! S-100 system bus for the IMSAI 8080 emulator.
 //!
-//! The S-100 bus is a passive backplane. Cards plug in and communicate
-//! via address lines, data lines, and control signals.
-//!
-//! The IMSAI 8080 has a fixed card configuration known at compile time:
-//! - MemoryCard: 64K RAM (full address space) -- inlined for speed
-//! - SerialCard: IMSAI SIO-2 (2x 8251A UART, ports 0x00-0x03)
-//! - TarbellCard: floppy disk controller (FD1771, ports 0x48-0x4B)
-//!
-//! Memory accesses go directly to the RAM array (no dispatch). I/O
-//! accesses dispatch by port number using a match statement.
+//! See `docs/INTERNALS.md` for the I/O port map and dispatch architecture.
 
 use intel8080::Bus;
 use crate::cards::{MemoryCard, SerialCard, TarbellCard};

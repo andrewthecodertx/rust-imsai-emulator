@@ -1,31 +1,8 @@
-//! Western Digital FD1771 Floppy Disk Formatter/Controller
+//! WD FD1771 Floppy Disk Formatter/Controller.
 //!
-//! The FD1771 is the chip at the heart of the Tarbell 1011 disk controller.
-//! It manages all floppy disk operations: seek, read, write, and track
-//! management. This model implements the FD1771 state machine as described
-//! in the WD1771/FD1771 datasheet.
-//!
-//! Register map (4 registers, addressed by A0-A1):
-//! | Offset | Read              | Write             |
-//! |--------|-------------------|-------------------|
-//! | 0      | Status register   | Command register  |
-//! | 1      | Track register    | Track register    |
-//! | 2      | Sector register   | Sector register   |
-//! | 3      | Data register     | Data register     |
-//!
-//! The FD1771 is NOT the same as the later WD1770/1772. Key differences:
-//! - Single-density only (FM encoding)
-//! - No track 0 detection on the data register (has a separate input pin)
-//! - Internal sector length fixed at 128 bytes (no programmable length)
-//!
-//! Command types:
-//! - Type I:  RESTORE, SEEK, STEP, STEP_IN, STEP_OUT
-//! - Type II: READ_SECTOR, WRITE_SECTOR
-//! - Type III: READ_ADDRESS, READ_TRACK, WRITE_TRACK
-//! - Type IV: FORCE_INTERRUPT
-//!
-//! References:
-//! - Wikipedia: <https://en.wikipedia.org/wiki/FD1771>
+//! See `docs/INTERNALS.md` for register map, command types, state machine,
+//! and behavioral notes. This model implements the FD1771 as described in
+//! the WD1771/FD1771 datasheet.
 
 use crate::disk::DiskImage;
 

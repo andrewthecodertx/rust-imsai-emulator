@@ -1,7 +1,6 @@
-//! Disk parameter constants for the Tarbell 8-inch floppy format
+//! Disk parameter constants for the Tarbell 8-inch floppy format.
 //!
-//! Defines the geometry and CP/M 2.2 disk parameters for the standard
-//! IBM 3740 single-density 8-inch floppy used by the Tarbell controller.
+//! See `docs/INTERNALS.md` for the full CP/M disk layout and skew table.
 
 /// Sectors per track (128-byte sectors)
 pub const SPT: u16 = 26;

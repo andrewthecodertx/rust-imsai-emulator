@@ -1,29 +1,7 @@
-//! Tarbell 1011/1011B floppy disk controller card (WD FD1771 + board logic)
+//! Tarbell 1011/1011B floppy disk controller card (WD FD1771 + board logic).
 //!
-//! The Tarbell 1011 is an S-100 bus floppy disk controller board built around
-//! the Western Digital FD1771 floppy disk formatter/controller chip. The board
-//! adds address decoding, drive select logic, a wait state generator, and
-//! auxiliary ports beyond the FD1771's four registers.
-//!
-//! I/O port map:
-//!
-//! | Port | Read            | Write              |
-//! |------|-----------------|--------------------|
-//! | 0x48 | FD1771 status   | FD1771 command     |
-//! | 0x49 | FD1771 track    | FD1771 track       |
-//! | 0x4A | FD1771 sector   | FD1771 sector      |
-//! | 0x4B | FD1771 data     | FD1771 data        |
-//! | 0xF8 | Tarbell (0x48)  | Tarbell (0x48)     |
-//! | 0xF9 | Tarbell (0x49)  | Tarbell (0x49)     |
-//! | 0xFA | Tarbell (0x4A)  | Tarbell (0x4A)     |
-//! | 0xFB | Tarbell (0x4B)  | Tarbell (0x4B)     |
-//! | 0xFC | DRQ/wait status | (unused)           |
-//! | 0xFD | (returns 0x00)  | (unused)           |
-//! | 0xFF | (returns 0x03)  | (unused)           |
-//!
-//! Ports 0xF8-0xFB are aliases for 0x48-0x4B, used by some CP/M BIOS versions.
-//! Port 0xFC returns the DRQ/wait status (bit 7 = DRQ active).
-//! Ports 0xFD and 0xFF return fixed values used by certain boot ROMs.
+//! See `docs/INTERNALS.md` for the port map including aliases and
+//! auxiliary ports, and `docs/HARDWARE.md` for the hardware overview.
 
 use crate::chips::Fd1771;
 use crate::disk::DiskImage;

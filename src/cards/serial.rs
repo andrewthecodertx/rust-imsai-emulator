@@ -1,17 +1,7 @@
-//! IMSAI SIO-2 serial interface card (2x Intel 8251A UART)
+//! IMSAI SIO-2 serial interface card (2x Intel 8251A UART).
 //!
-//! The IMSAI SIO-2 is a dual-channel serial I/O board for the S-100 bus.
-//! It contains two Intel 8251A programmable communication interface chips:
-//!
-//! - Channel A (console): ports 0x00 (data) and 0x01 (command/status)
-//! - Channel B (auxiliary/listing): ports 0x02 (data) and 0x03 (command/status)
-//!
-//! The SIO-2 also decodes two additional port pairs that some configurations use:
-//! - Port 0x79: Channel A status (alias for 0x01, used by some BIOS versions)
-//! - Port 0x7B: Channel A data output (alias for 0x00, used by some BIOS versions)
-//!
-//! In the real hardware, each 8251A connects to a serial port. The host
-//! terminal emulation connects to Channel A for console I/O.
+//! See `docs/INTERNALS.md` for TX/RX data flow, UART state machine,
+//! and port mapping.
 
 use crate::chips::Uart8251;
 use crate::io::Keyboard;

@@ -1,13 +1,6 @@
-//! Memory card: 64KB static RAM on the S-100 bus
+//! Memory card: 64KB static RAM on the S-100 bus.
 //!
-//! In a real IMSAI 8080, the 64KB RAM would be spread across multiple
-//! S-100 RAM cards (typically 4-8 cards of 8K or 16K each), each decoding
-//! their own address range. For now we model it as one card owning the
-//! full 64K address space.
-//!
-//! A future enhancement would split this into configurable banked memory
-//! cards that can be selectively enabled/disabled (e.g., for testing
-//! partial RAM configurations or ROM overlays).
+//! See `docs/HARDWARE.md` for the hardware overview.
 
 use serde::{Deserialize, Serialize};
 use std::path::Path;

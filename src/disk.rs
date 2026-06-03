@@ -1,10 +1,6 @@
-//! CP/M disk image management for the Tarbell controller
+//! CP/M-compatible disk image management for the Tarbell controller.
 //!
-//! Handles loading and manipulating CP/M 2.2 disk images for the
-//! Tarbell single-density 8-inch floppy format (IBM 3740).
-//!
-//! A disk image is a flat 256,256-byte file representing 77 tracks of
-//! 26 sectors of 128 bytes each.
+//! See `docs/INTERNALS.md` for disk format details and skew table.
 
 use crate::dpb::{SPT, SECTOR_SIZE, SKEW_TABLE, TOTAL_TRACKS};
 

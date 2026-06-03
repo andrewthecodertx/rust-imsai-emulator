@@ -1,30 +1,8 @@
-//! IMSAI 8080 front panel (switches and LEDs)
+//! IMSAI 8080 front panel (switches and LEDs).
 //!
-//! The IMSAI 8080 front panel is NOT an S-100 card. It's a separate circuit
-//! that directly drives and monitors the S-100 bus control lines.
-//!
-//! In a real IMSAI, the front panel connects to these S-100 signals:
-//!
-//! Address bus (A0-A15):
-//!   - STOP mode: panel drives the address bus from the toggle switches
-//!   - RUN mode: panel monitors the address bus (shows CPU address on LEDs)
-//!
-//! Data bus (D0-D7):
-//!   - EXAMINE: panel reads data bus into data LEDs
-//!   - DEPOSIT: panel writes data switches onto data bus
-//!   - RUN mode: panel monitors data bus (shows CPU data on LEDs)
-//!
-//! Control signals:
-//!   - ~RUN/STOP flip-flop: holds CPU in WAIT when STOP
-//!   - SINGLE STEP: releases WAIT for one M1 cycle, then re-asserts
-//!   - SSWN (sense switches): optional port FF input
-//!   - ~M1: instruction fetch cycle (shown on LED)
-//!   - ~MEMR: memory read (used for examine)
-//!   - MWRT: memory write (used for deposit)
-//!
-//! The panel does NOT go through any I/O port. It has direct bus access.
-//! This is what makes it useful as a hardware debugger: it can examine
-//! and deposit memory even if nothing works (no CPU, no firmware, nothing).
+//! The front panel is NOT an S-100 card. It directly accesses the address bus,
+//! data bus, and control lines. See `docs/INTERNALS.md` for bus monitoring
+//! behavior, single step, and RUN/STOP semantics.
 
 use std::collections::VecDeque;
 

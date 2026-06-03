@@ -1,21 +1,7 @@
-//! Intel 8251A Programmable Communication Interface (UART)
+//! Intel 8251A Programmable Communication Interface (UART).
 //!
-//! The 8251A is a universal synchronous/asynchronous receiver/transmitter
-//! used in the IMSAI SIO-2 serial board. This model implements the full
-//! register set and state machine as described in the Intel 8251A datasheet.
-//!
-//! Key features:
-//! - Programmable serial characteristics (baud, parity, stop bits, data bits)
-//! - Separate TX and RX data buffers
-//! - Mode/command/status register model
-//! - Error detection: parity, overrun, framing
-//! - Modem control signals (DSR, CTS, DTR, RTS) modeled as needed
-//!
-//! Programming sequence:
-//! 1. RESET (hardware or command)
-//! 2. Write mode instruction (to control port)
-//! 3. Write command instruction (to control port)
-//! 4. Read status / write data / read data
+//! See `docs/INTERNALS.md` for state machine, TX/RX data flow,
+//! programming sequence, and behavioral notes.
 //!
 //! The 8251A distinguishes between mode, command, and sync bytes using an
 //! internal state machine triggered by the reset sequence.

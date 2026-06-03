@@ -18,6 +18,9 @@ A bare IMSAI 8080 with no software is just:
 There is no ROM, no BIOS, no firmware. You toggle programs in from the front
 panel or boot from disk after manually keying in a bootstrap.
 
+See [INTERNALS.md](INTERNALS.md) for bus architecture, chip behavior, and
+implementation details.
+
 ## Front Panel (the defining IMSAI feature)
 
 The IMSAI front panel has:
@@ -26,11 +29,11 @@ The IMSAI front panel has:
 - RUN/STOP toggle (starts/stops CPU execution)
 - SINGLE STEP button (execute one instruction)
 - EXAMINE button (read byte at address switches into data LEDs)
-- DEPOSIT button (write data switches into RAM at address)
+- DEPOSIT button (write data switches into memory at address)
 - EXAMINE NEXT / DEPOSIT NEXT (increment address, then examine/deposit)
 - 16 address LEDs (show current address bus)
 - 8 data LEDs (show current data bus)
-- Status LEDs: RUN, STOPPED, M1 (machine cycle 1), WAIT, INT, HLDA
+- Status LEDs: RUN, STOPPED, M1, WAIT, INT, HLDA
 
 Front panel behavior:
 - STOP: CPU is halted. Address/data LEDs show the bus state frozen.
@@ -40,54 +43,52 @@ Front panel behavior:
 - SINGLE STEP: CPU executes one M1 cycle, then stops. Address
   LEDs show the new PC, data LEDs show the instruction byte.
 
-## Chip Models (`src/chips/`)
+## Chip Models
 
-### Intel 8251A UART (`chips/uart8251.rs`)
-- Full mode/command/status register model
-- TX/RX data buffers with flow control
-- Error detection: parity, overrun, framing
-- 15 tests
+### Intel 8251A UART
 
-### WD FD1771 FDC (`chips/fd1771.rs`)
-- All 4 command types (I-IV) with state machine
-- DRQ/INTRQ signaling
-- Per-drive head position tracking
-- 26 tests
+See [INTERNALS.md](INTERNALS.md#intel-8251a-uart-chipsuart8251rs) for the full
+state machine, TX/RX data flow, and behavioral notes.
 
-## Card Models (`src/cards/`)
+Key detail: **TxRDY is bit 0 (0x01), not bit 1 (0x02).** Checking the wrong
+bit tests RxRDY instead, causing infinite loops.
+
+### WD FD1771 FDC
+
+See [INTERNALS.md](INTERNALS.md#wd-fd1771-floppy-controller-chipsfd1771rs) for
+command types, state machine details, and implementation notes.
+
+## Card Models
 
 ### MemoryCard (`cards/memory.rs`)
-- 64K RAM, initialized to 0xFF (floating bus state)
-- 5 tests
+
+64K RAM, initialized to 0xFF (floating bus state). Accesses go directly to the
+RAM array with no dispatch overhead.
 
 ### SerialCard (`cards/serial.rs`)
-- IMSAI SIO-2: two 8251A UART channels
-- Ports 0x00-0x03 + aliases 0x79/0x7B
-- 10 tests
+
+IMSAI SIO-2: two 8251A UART channels plus board-level address decoding.
+See [INTERNALS.md](INTERNALS.md#serial-card) for RX/TX data flow.
 
 ### TarbellCard (`cards/tarbell.rs`)
-- FD1771 + board-level port decoding
-- Ports 0x48-0x4B + aliases 0xF8-0xFF
-- 8 tests
+
+FD1771 + board-level port decoding and auxiliary ports.
+See [INTERNALS.md](INTERNALS.md#tarbell-board-port-aliases) for the full port
+map including aliases and fixed-value ports.
 
 ### FrontPanel (`cards/front_panel.rs`)
-- 16 address switches + 8 data switches
-- RUN/STOP, SINGLE STEP, EXAMINE, DEPOSIT, EXAMINE NEXT, DEPOSIT NEXT
-- 16 address LEDs + 8 data LEDs + status LEDs
-- Direct memory access for examine/deposit (bypasses CPU)
-- Single step: run CPU for one M1 cycle, then freeze
-- 22 tests
+
+Not an S-100 card. Directly accesses the bus for examine/deposit and monitors
+address/data lines during RUN. See
+[INTERNALS.md](INTERNALS.md#front-panel-cardsfront_panelrs) for bus monitoring.
 
 ## Bus (`bus.rs`)
 
-- I/O dispatch by card port ownership
-- Memory dispatch by card address ownership
-- Front panel has direct bus access (not a Card trait implementor)
-- Convenience methods for console/tarbell card access
+See [INTERNALS.md](INTERNALS.md#bus-architecture) for the current architecture.
+Cards are stored inline with direct field access for memory and match-based
+dispatch for I/O ports.
 
-## Disk Image (`disk.rs`)
+## Disk Image Format (`disk.rs`, `dpb.rs`)
 
-- CP/M 2.2 filesystem support for IBM 3740 single-density 8" format
-- 77 tracks, 26 sectors, 128 bytes/sector (256,256 bytes total)
-- 6:1 interleave sector skew table (canonical, defined in `dpb.rs`)
-- Read/write physical and logical sectors
+See [INTERNALS.md](INTERNALS.md#disk-image-format-diskrs-dpbrs) for the format
+specification, skew table, and sector numbering conventions.
