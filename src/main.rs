@@ -5,24 +5,25 @@ use std::time::Instant;
 
 use crossterm::{
     event::{self, Event, KeyCode, KeyEvent, KeyModifiers},
-    terminal::{EnterAlternateScreen, LeaveAlternateScreen, enable_raw_mode, disable_raw_mode},
+    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
     ExecutableCommand,
 };
 
-use rust_imsai_emulator::save_memory_to_file;
 use rust_imsai_emulator::load_memory_from_file;
+use rust_imsai_emulator::save_memory_to_file;
 use rust_imsai_emulator::TarbellCard;
-use rust_imsai_emulator::{
-    execute_panel_program, find_program_start, load_program_file,
-};
+use rust_imsai_emulator::{execute_panel_program, find_program_start, load_program_file};
 
 fn print_usage(args: &Vec<String>) {
     eprintln!("IMSAI 8080 Emulator - Terminal Mode");
     eprintln!();
-    eprintln!("Usage: {} [OPTIONS]", args.get(0).unwrap_or(&"imsai-cli".to_string()));
+    eprintln!(
+        "Usage: {} [OPTIONS]",
+        args.get(0).unwrap_or(&"imsai-cli".to_string())
+    );
     eprintln!();
     eprintln!("Mode (choose one):");
-    eprintln!("  --load <file> [addr]       Load raw binary at address (default 0x0000)");
+    eprintln!("  --binary <file> [addr]     Load raw binary at address (default 0x0000)");
     eprintln!("  --program <file.json>      Load a front panel program (.json)");
     eprintln!("  (no arguments)             Start with saved memory (or empty if first run)");
     eprintln!();
@@ -35,7 +36,7 @@ fn print_usage(args: &Vec<String>) {
     eprintln!("  --step, -s                 Step trace (first 500 instructions)");
     eprintln!("  --pctrace, -p              PC ring-buffer trace (last 8K instructions)");
     eprintln!("  --script                   Scripted mode (captures console output)");
-    eprintln!("  --cmd \"text\"               Pre-load keyboard input for scripted testing");
+    eprintln!("  --cmd \"text\"             Pre-load keyboard input for scripted testing");
     eprintln!("  --help, -h                 Show this help");
 }
 
@@ -55,22 +56,30 @@ fn main() {
     let batch_mode = args.contains(&"--batch".to_string()) || args.contains(&"-b".to_string());
 
     // --cmd "DIR\r" pre-loads keyboard input for scripted testing
-    let cmd_text = args.iter().position(|a| a == "--cmd")
+    let cmd_text = args
+        .iter()
+        .position(|a| a == "--cmd")
         .and_then(|i| args.get(i + 1))
         .map(|s| s.clone());
 
-    // --load <file> [addr]: load raw binary at address
-    let load_arg = args.iter().position(|a| a == "--load")
+    // --binary <file> [addr]: load raw binary at address
+    let load_arg = args
+        .iter()
+        .position(|a| a == "--binary")
         .and_then(|i| args.get(i + 1))
         .map(|s| s.to_string());
 
     // --program <file.json>: load front panel program
-    let program_arg = args.iter().position(|a| a == "--program")
+    let program_arg = args
+        .iter()
+        .position(|a| a == "--program")
         .and_then(|i| args.get(i + 1))
         .map(|s| s.to_string());
 
     // --disk <file>: mount disk image in drive A
-    let disk_arg = args.iter().position(|a| a == "--disk")
+    let disk_arg = args
+        .iter()
+        .position(|a| a == "--disk")
         .and_then(|i| args.get(i + 1))
         .map(|s| s.to_string());
 
@@ -78,7 +87,9 @@ fn main() {
     let load_addr: u16 = if load_arg.is_some() {
         let load_pos = args.iter().position(|a| a == "--load").unwrap_or(0);
         args.get(load_pos + 2)
-            .and_then(|s| u16::from_str_radix(s.trim_start_matches("0x").trim_start_matches("0X"), 16).ok())
+            .and_then(|s| {
+                u16::from_str_radix(s.trim_start_matches("0x").trim_start_matches("0X"), 16).ok()
+            })
             .unwrap_or(0)
     } else {
         0
@@ -106,7 +117,12 @@ fn main() {
         // Load a raw binary file at an address
         match std::fs::read(path) {
             Ok(data) => {
-                eprintln!("Loaded {} bytes from {} at 0x{:04X}", data.len(), path, load_addr);
+                eprintln!(
+                    "Loaded {} bytes from {} at 0x{:04X}",
+                    data.len(),
+                    path,
+                    load_addr
+                );
                 emu.load_program(load_addr, &data);
                 start_pc = Some(load_addr);
             }
@@ -131,7 +147,12 @@ fn main() {
 
     // Mount disk image if specified (orthogonal to program/load)
     if let Some(ref path) = disk_arg {
-        match emu.bus.card_mut::<TarbellCard>().expect("Tarbell card").insert_disk(0, path) {
+        match emu
+            .bus
+            .card_mut::<TarbellCard>()
+            .expect("Tarbell card")
+            .insert_disk(0, path)
+        {
             Ok(()) => eprintln!("Disk mounted in drive A: {}", path),
             Err(e) => {
                 eprintln!("Error mounting disk '{}': {}", path, e);
@@ -151,16 +172,17 @@ fn main() {
         emu.bus.console().type_text(&input);
     }
 
+    // Could use match here but it's a bit more verbose
     if step_trace {
         run_step_trace(&mut emu, 500);
     } else if diag {
-        run_diag(&mut emu, 50000);
+        run_diag(&mut emu, 50_000);
     } else if pc_trace {
         run_pc_trace(&mut emu, 5_000_000);
     } else if verbose_trace {
-        run_verbose_trace(&mut emu, 200000);
+        run_verbose_trace(&mut emu, 200_000);
     } else if trace {
-        run_trace(&mut emu, 50000);
+        run_trace(&mut emu, 50_000);
     } else if args.contains(&"--script".to_string()) {
         run_scripted(&mut emu, cmd_text.as_deref(), 100_000_000);
     } else if batch_mode {
@@ -214,8 +236,10 @@ fn run_step_trace(emu: &mut rust_imsai_emulator::Imsai8080, max: u64) {
             _ => format!("0x{:02X}", op),
         };
 
-        println!("{:6}: PC=0x{:04X} {:20} A=0x{:02X} C=0x{:02X} SP=0x{:04X}",
-            count, pc, desc, emu.cpu.a, emu.cpu.c, emu.cpu.sp);
+        println!(
+            "{:6}: PC=0x{:04X} {:20} A=0x{:02X} C=0x{:02X} SP=0x{:04X}",
+            count, pc, desc, emu.cpu.a, emu.cpu.c, emu.cpu.sp
+        );
 
         emu.step();
         count += 1;
@@ -225,7 +249,10 @@ fn run_step_trace(emu: &mut rust_imsai_emulator::Imsai8080, max: u64) {
         }
     }
 
-    println!("\nStopped at PC=0x{:04X} after {} instructions", emu.cpu.pc, count);
+    println!(
+        "\nStopped at PC=0x{:04X} after {} instructions",
+        emu.cpu.pc, count
+    );
 }
 
 fn run_diag(emu: &mut rust_imsai_emulator::Imsai8080, max: u64) {
@@ -260,7 +287,10 @@ fn run_diag(emu: &mut rust_imsai_emulator::Imsai8080, max: u64) {
     println!("\n=== I/O LOG (first 50) ===");
     for (i, (cnt, port, val, is_out)) in io_log.iter().take(50).enumerate() {
         let dir = if *is_out { "OUT" } else { "IN " };
-        println!("{:5}: {:08} {:3} 0x{:02X} A=0x{:02X}", i, cnt, dir, port, val);
+        println!(
+            "{:5}: {:08} {:3} 0x{:02X} A=0x{:02X}",
+            i, cnt, dir, port, val
+        );
     }
     if io_log.len() > 50 {
         println!("  ... {} total I/O operations", io_log.len());
@@ -272,9 +302,22 @@ fn run_diag(emu: &mut rust_imsai_emulator::Imsai8080, max: u64) {
     }
 
     println!("\n=== FINAL STATE ===");
-    println!("PC=0x{:04X} SP=0x{:04X} A=0x{:02X}", emu.cpu.pc, emu.cpu.sp, emu.cpu.a);
-    println!("0x0000: {:02X} {:02X} {:02X}", emu.bus.mem_read(0), emu.bus.mem_read(1), emu.bus.mem_read(2));
-    println!("0x0005: {:02X} {:02X} {:02X}", emu.bus.mem_read(5), emu.bus.mem_read(6), emu.bus.mem_read(7));
+    println!(
+        "PC=0x{:04X} SP=0x{:04X} A=0x{:02X}",
+        emu.cpu.pc, emu.cpu.sp, emu.cpu.a
+    );
+    println!(
+        "0x0000: {:02X} {:02X} {:02X}",
+        emu.bus.mem_read(0),
+        emu.bus.mem_read(1),
+        emu.bus.mem_read(2)
+    );
+    println!(
+        "0x0005: {:02X} {:02X} {:02X}",
+        emu.bus.mem_read(5),
+        emu.bus.mem_read(6),
+        emu.bus.mem_read(7)
+    );
 
     let display = emu.bus.console().video().get_display_string();
     if !display.trim().is_empty() && display.trim().chars().any(|c| c != ' ') {
@@ -283,7 +326,6 @@ fn run_diag(emu: &mut rust_imsai_emulator::Imsai8080, max: u64) {
         println!("\n(no display output)");
     }
 }
-
 
 /// Helper: save memory to imsai_memory.json
 fn save_memory(emu: &mut rust_imsai_emulator::Imsai8080) {
@@ -306,7 +348,9 @@ fn run_terminal(emu: &mut rust_imsai_emulator::Imsai8080) {
     emu.bus.console().set_auto_render(false);
 
     let mut stdout = io::stdout();
-    stdout.execute(EnterAlternateScreen).expect("Failed to enter alternate screen");
+    stdout
+        .execute(EnterAlternateScreen)
+        .expect("Failed to enter alternate screen");
     // Clear the alternate screen and home the cursor so no stale content
     // (or rows below our compact panel) lingers.
     print!("\x1B[2J\x1B[H");
@@ -396,14 +440,19 @@ fn run_terminal(emu: &mut rust_imsai_emulator::Imsai8080) {
                 match ev {
                     Event::Key(key_event) => {
                         match key_event {
-                            KeyEvent { code: KeyCode::Esc, .. } => {
+                            KeyEvent {
+                                code: KeyCode::Esc, ..
+                            } => {
                                 emu.bus.console().type_text("\x1B");
                                 got_key = true;
                             }
                             // F5 = start/stop the computer (RUN/STOP toggle),
                             // matching the GUI's F5. Freezes/resumes the CPU in
                             // place; force a repaint so the status bar updates.
-                            KeyEvent { code: KeyCode::F(5), .. } => {
+                            KeyEvent {
+                                code: KeyCode::F(5),
+                                ..
+                            } => {
                                 running = !running;
                                 last_display.clear();
                                 got_key = true;
@@ -411,7 +460,11 @@ fn run_terminal(emu: &mut rust_imsai_emulator::Imsai8080) {
                             // Ctrl+D = graceful shutdown (save memory, restore
                             // terminal). crossterm delivers Ctrl+D as
                             // Char('d')+CONTROL.
-                            KeyEvent { code: KeyCode::Char('d'), modifiers: KeyModifiers::CONTROL, .. } => {
+                            KeyEvent {
+                                code: KeyCode::Char('d'),
+                                modifiers: KeyModifiers::CONTROL,
+                                ..
+                            } => {
                                 print!("\r\n\r\n--- Ctrl+D pressed, shutting down ---\r\n");
                                 stdout.flush().ok();
                                 stdout.execute(LeaveAlternateScreen).ok();
@@ -421,7 +474,11 @@ fn run_terminal(emu: &mut rust_imsai_emulator::Imsai8080) {
                                 save_memory(emu);
                                 return;
                             }
-                            KeyEvent { code: KeyCode::Char('k'), modifiers: KeyModifiers::CONTROL, .. } => {
+                            KeyEvent {
+                                code: KeyCode::Char('k'),
+                                modifiers: KeyModifiers::CONTROL,
+                                ..
+                            } => {
                                 // A run-type command (load/program/go) resumes
                                 // execution even if we were stopped (F5) before.
                                 if run_command_modal(emu, &mut stdout, &mut program_name) {
@@ -430,27 +487,55 @@ fn run_terminal(emu: &mut rust_imsai_emulator::Imsai8080) {
                                 last_display.clear();
                                 got_key = true;
                             }
-                            KeyEvent { code: KeyCode::Char(ch), modifiers: KeyModifiers::CONTROL, .. } => {
+                            KeyEvent {
+                                code: KeyCode::Char(ch),
+                                modifiers: KeyModifiers::CONTROL,
+                                ..
+                            } => {
                                 let ctrl_ch = (ch as u8) & 0x1F;
                                 if ctrl_ch != 0 {
-                                    emu.bus.serial().type_text(&String::from_utf8_lossy(&[ctrl_ch]));
+                                    emu.bus
+                                        .serial()
+                                        .type_text(&String::from_utf8_lossy(&[ctrl_ch]));
                                     got_key = true;
                                 }
                             }
-                            KeyEvent { code: KeyCode::Char(ch), .. } => {
+                            KeyEvent {
+                                code: KeyCode::Char(ch),
+                                ..
+                            } => {
                                 let upper: String = ch.to_uppercase().collect();
                                 emu.bus.serial().type_text(&upper);
                                 got_key = true;
                             }
-                            KeyEvent { code: KeyCode::Enter, .. } => {
+                            KeyEvent {
+                                code: KeyCode::Enter,
+                                ..
+                            } => {
                                 emu.bus.serial().type_text("\r");
                                 got_key = true;
                             }
-                            KeyEvent { code: KeyCode::Backspace, .. } => {
+                            KeyEvent {
+                                code: KeyCode::Backspace,
+                                ..
+                            } => {
                                 emu.bus.serial().type_text("\x7F");
                                 got_key = true;
                             }
-                            KeyEvent { code: KeyCode::F(_) | KeyCode::Null | KeyCode::CapsLock | KeyCode::ScrollLock | KeyCode::NumLock | KeyCode::PrintScreen | KeyCode::Pause | KeyCode::KeypadBegin | KeyCode::Media(_) | KeyCode::Modifier(_), .. } => {}
+                            KeyEvent {
+                                code:
+                                    KeyCode::F(_)
+                                    | KeyCode::Null
+                                    | KeyCode::CapsLock
+                                    | KeyCode::ScrollLock
+                                    | KeyCode::NumLock
+                                    | KeyCode::PrintScreen
+                                    | KeyCode::Pause
+                                    | KeyCode::KeypadBegin
+                                    | KeyCode::Media(_)
+                                    | KeyCode::Modifier(_),
+                                ..
+                            } => {}
                             _ => {}
                         }
                     }
@@ -588,7 +673,9 @@ fn run_command_modal(
         match key {
             // Esc closes the modal. If the user typed something but didn't
             // submit it, drop it silently (matches less/vim convention).
-            KeyEvent { code: KeyCode::Esc, .. } => {
+            KeyEvent {
+                code: KeyCode::Esc, ..
+            } => {
                 break;
             }
             // Ctrl+K also closes — symmetric with the way it opens.
@@ -609,7 +696,8 @@ fn run_command_modal(
                 break;
             }
             KeyEvent {
-                code: KeyCode::Enter, ..
+                code: KeyCode::Enter,
+                ..
             } => {
                 let cmd = input.trim().to_string();
                 input.clear();
@@ -634,7 +722,14 @@ fn run_command_modal(
                 }
                 last_message = Some(result.message.clone());
                 ever_ran = true;
-                render_bottom_row(emu, program_name, BottomMode::Prompt, false, &input, last_message.as_deref());
+                render_bottom_row(
+                    emu,
+                    program_name,
+                    BottomMode::Prompt,
+                    false,
+                    &input,
+                    last_message.as_deref(),
+                );
                 stdout.flush().ok();
                 if result.close_after {
                     // A run-type command (load/program/go): resume execution
@@ -648,10 +743,18 @@ fn run_command_modal(
                 }
             }
             KeyEvent {
-                code: KeyCode::Backspace, ..
+                code: KeyCode::Backspace,
+                ..
             } => {
                 input.pop();
-                render_bottom_row(emu, program_name, BottomMode::Prompt, false, &input, last_message.as_deref());
+                render_bottom_row(
+                    emu,
+                    program_name,
+                    BottomMode::Prompt,
+                    false,
+                    &input,
+                    last_message.as_deref(),
+                );
                 stdout.flush().ok();
             }
             KeyEvent {
@@ -665,7 +768,14 @@ fn run_command_modal(
                 ..
             } => {
                 input.push(c);
-                render_bottom_row(emu, program_name, BottomMode::Prompt, false, &input, last_message.as_deref());
+                render_bottom_row(
+                    emu,
+                    program_name,
+                    BottomMode::Prompt,
+                    false,
+                    &input,
+                    last_message.as_deref(),
+                );
                 stdout.flush().ok();
             }
             _ => {}
@@ -722,8 +832,16 @@ fn run_command(
     program_name: &mut String,
 ) -> CommandResult {
     let parts: Vec<&str> = input.splitn(3, ' ').collect();
-    let close = |msg: String| CommandResult { message: msg, close_after: true, quit: false };
-    let stay = |msg: String| CommandResult { message: msg, close_after: false, quit: false };
+    let close = |msg: String| CommandResult {
+        message: msg,
+        close_after: true,
+        quit: false,
+    };
+    let stay = |msg: String| CommandResult {
+        message: msg,
+        close_after: false,
+        quit: false,
+    };
     match parts[0].to_lowercase().as_str() {
         "load" => {
             let path = match parts.get(1) {
@@ -829,8 +947,10 @@ fn run_command(
 fn print_instructions_summary(count: u64, elapsed: std::time::Duration) {
     let secs = elapsed.as_secs_f64();
     let ips = if secs > 0.0 { count as f64 / secs } else { 0.0 };
-    eprintln!("Executed {} instructions in {:.2}s ({:.0} ips)",
-        count, secs, ips);
+    eprintln!(
+        "Executed {} instructions in {:.2}s ({:.0} ips)",
+        count, secs, ips
+    );
 }
 
 fn run_interactive(emu: &mut rust_imsai_emulator::Imsai8080, max_instructions: u64) {
@@ -848,7 +968,10 @@ fn run_interactive(emu: &mut rust_imsai_emulator::Imsai8080, max_instructions: u
         }
     }
 
-    println!("\nStopped at PC=0x{:04X} after {} instructions", emu.cpu.pc, count);
+    println!(
+        "\nStopped at PC=0x{:04X} after {} instructions",
+        emu.cpu.pc, count
+    );
     let display = emu.bus.console().video().get_display_string();
     if !display.trim().is_empty() && display.trim().chars().any(|c| c != ' ') {
         println!("\nDisplay:\n{}", display);
@@ -875,7 +998,10 @@ fn dump_memory(emu: &rust_imsai_emulator::Imsai8080, start: u16, len: usize, lab
 }
 
 fn run_trace(emu: &mut rust_imsai_emulator::Imsai8080, max: u64) {
-    println!("Tracing {} instructions from PC=0x{:04X}...", max, emu.cpu.pc);
+    println!(
+        "Tracing {} instructions from PC=0x{:04X}...",
+        max, emu.cpu.pc
+    );
     let mut count: u64 = 0;
     loop {
         emu.step();
@@ -884,13 +1010,19 @@ fn run_trace(emu: &mut rust_imsai_emulator::Imsai8080, max: u64) {
             break;
         }
     }
-    println!("Stopped at PC=0x{:04X} after {} instructions", emu.cpu.pc, count);
+    println!(
+        "Stopped at PC=0x{:04X} after {} instructions",
+        emu.cpu.pc, count
+    );
     let display = emu.bus.console().video().get_display_string();
     println!("\nDisplay:\n{}", display);
 }
 fn run_pc_trace(emu: &mut rust_imsai_emulator::Imsai8080, max: u64) {
     const RING_SIZE: usize = 8192;
-    println!("=== PC TRACE ({} instructions, ring={}) ===", max, RING_SIZE);
+    println!(
+        "=== PC TRACE ({} instructions, ring={}) ===",
+        max, RING_SIZE
+    );
 
     // Ring buffer entries: (count, pc, op_bytes, A, B, C, D, E, H, L, SP, flags)
     let mut ring: Vec<(u64, u16, [u8; 4], u8, u8, u8, u8, u8, u8, u8, u16, u8)> =
@@ -959,9 +1091,17 @@ fn run_pc_trace(emu: &mut rust_imsai_emulator::Imsai8080, max: u64) {
         }
 
         // Track region transitions
-        let region = if pc < 0x0100 { 0u8 } // zero page
-            else if pc < 0xC000 { 1 }       // user code
-            else { 2 };                     // high RAM
+        let region = if pc < 0x0100 {
+            0u8
+        }
+        // zero page
+        else if pc < 0xC000 {
+            1
+        }
+        // user code
+        else {
+            2
+        }; // high RAM
         if region != last_region {
             transitions.push((count, pc, last_region, region));
             last_region = region;
@@ -998,12 +1138,17 @@ fn run_pc_trace(emu: &mut rust_imsai_emulator::Imsai8080, max: u64) {
     let region_names = ["ZEROPAGE", "USER    ", "HIGHRAM "];
     println!("\n=== REGION TRANSITIONS ===");
     for (cnt, pc, from, to) in &transitions {
-        println!("  {:8}: PC=0x{:04X} {} -> {}",
-            cnt, pc, region_names[*from as usize], region_names[*to as usize]);
+        println!(
+            "  {:8}: PC=0x{:04X} {} -> {}",
+            cnt, pc, region_names[*from as usize], region_names[*to as usize]
+        );
     }
 
     // Dump ring buffer (tail) — only non-NOP
-    println!("\n=== LAST {} INSTRUCTIONS (non-NOP only) ===", ring.len().min(RING_SIZE));
+    println!(
+        "\n=== LAST {} INSTRUCTIONS (non-NOP only) ===",
+        ring.len().min(RING_SIZE)
+    );
     let start = if ring_full { ring_idx } else { 0 };
     let len = ring.len().min(RING_SIZE);
     let mut nop_count: u64 = 0;
@@ -1041,9 +1186,15 @@ fn run_pc_trace(emu: &mut rust_imsai_emulator::Imsai8080, max: u64) {
             _ => "",
         };
         if port_name.is_empty() {
-            println!("{:5}: {:08} {:3} 0x{:02X}       A=0x{:02X}", i, cnt, dir, port, val);
+            println!(
+                "{:5}: {:08} {:3} 0x{:02X}       A=0x{:02X}",
+                i, cnt, dir, port, val
+            );
         } else {
-            println!("{:5}: {:08} {:3} 0x{:02X} {:10} A=0x{:02X}", i, cnt, dir, port, port_name, val);
+            println!(
+                "{:5}: {:08} {:3} 0x{:02X} {:10} A=0x{:02X}",
+                i, cnt, dir, port, port_name, val
+            );
         }
     }
     if io_log.is_empty() {
@@ -1059,13 +1210,30 @@ fn run_pc_trace(emu: &mut rust_imsai_emulator::Imsai8080, max: u64) {
 
     // Final state
     println!("\n=== FINAL STATE ===");
-    println!("PC=0x{:04X} SP=0x{:04x} A=0x{:02X} BC=0x{:02X}{:02X} DE=0x{:02X}{:02X} HL=0x{:02X}{:02X}",
-        emu.cpu.pc, emu.cpu.sp, emu.cpu.a,
-        emu.cpu.b, emu.cpu.c, emu.cpu.d, emu.cpu.e, emu.cpu.h, emu.cpu.l);
-    println!("0x0000: {:02X} {:02X} {:02X}   (reset vector)",
-        emu.bus.mem_read(0), emu.bus.mem_read(1), emu.bus.mem_read(2));
-    println!("0x0005: {:02X} {:02X} {:02X}   (CALL 5 vector)",
-        emu.bus.mem_read(5), emu.bus.mem_read(6), emu.bus.mem_read(7));
+    println!(
+        "PC=0x{:04X} SP=0x{:04x} A=0x{:02X} BC=0x{:02X}{:02X} DE=0x{:02X}{:02X} HL=0x{:02X}{:02X}",
+        emu.cpu.pc,
+        emu.cpu.sp,
+        emu.cpu.a,
+        emu.cpu.b,
+        emu.cpu.c,
+        emu.cpu.d,
+        emu.cpu.e,
+        emu.cpu.h,
+        emu.cpu.l
+    );
+    println!(
+        "0x0000: {:02X} {:02X} {:02X}   (reset vector)",
+        emu.bus.mem_read(0),
+        emu.bus.mem_read(1),
+        emu.bus.mem_read(2)
+    );
+    println!(
+        "0x0005: {:02X} {:02X} {:02X}   (CALL 5 vector)",
+        emu.bus.mem_read(5),
+        emu.bus.mem_read(6),
+        emu.bus.mem_read(7)
+    );
 }
 
 /// Minimal 8080 disassembler for trace output.
@@ -1152,10 +1320,10 @@ fn disassemble_8080(_pc: u16, bytes: [u8; 4]) -> String {
         0x71 => "MOV M,C".into(),
         // Arithmetic/Logic
         0x80..=0x8F => {
-            let names = ["ADD","ADC","SUB","SBB","ANA","XRA","ORA","CMP"];
+            let names = ["ADD", "ADC", "SUB", "SBB", "ANA", "XRA", "ORA", "CMP"];
             let reg = op & 0x07;
             let op_name = names[((op >> 3) & 7) as usize];
-            let reg_name = ["B","C","D","E","H","L","M","A"][reg as usize];
+            let reg_name = ["B", "C", "D", "E", "H", "L", "M", "A"][reg as usize];
             format!("{} {}", op_name, reg_name)
         }
         // Increment/Decrement
@@ -1230,8 +1398,11 @@ fn disassemble_8080(_pc: u16, bytes: [u8; 4]) -> String {
             if op >> 6 == 0b01 {
                 let dst = (op >> 3) & 7;
                 let src = op & 7;
-                let reg_names = ["B","C","D","E","H","L","M","A"];
-                format!("MOV {},{}", reg_names[dst as usize], reg_names[src as usize])
+                let reg_names = ["B", "C", "D", "E", "H", "L", "M", "A"];
+                format!(
+                    "MOV {},{}",
+                    reg_names[dst as usize], reg_names[src as usize]
+                )
             } else {
                 format!("0x{:02X}", op)
             }
@@ -1250,7 +1421,9 @@ fn run_verbose_trace(emu: &mut rust_imsai_emulator::Imsai8080, max: u64) {
 
         if op == 0xD3 {
             let port = emu.bus.mem_read(pc + 1);
-            if port == 0x00 && (emu.cpu.a >= 32 && emu.cpu.a < 127 || emu.cpu.a == 0x0D || emu.cpu.a == 0x0A) {
+            if port == 0x00
+                && (emu.cpu.a >= 32 && emu.cpu.a < 127 || emu.cpu.a == 0x0D || emu.cpu.a == 0x0A)
+            {
                 print!("{}", emu.cpu.a as char);
                 let _ = std::io::Write::flush(&mut std::io::stdout());
             } else if (0x48..=0x4B).contains(&port) || (0xF8..=0xFD).contains(&port) {
@@ -1274,11 +1447,18 @@ fn run_verbose_trace(emu: &mut rust_imsai_emulator::Imsai8080, max: u64) {
         }
     }
 
-    println!("\nStopped at PC=0x{:04X} after {} instructions", emu.cpu.pc, count);
+    println!(
+        "\nStopped at PC=0x{:04X} after {} instructions",
+        emu.cpu.pc, count
+    );
 }
 
 /// No terminal raw mode needed, just pure batch execution with I/O interception.
-fn run_scripted(emu: &mut rust_imsai_emulator::Imsai8080, cmd: Option<&str>, max_instructions: u64) {
+fn run_scripted(
+    emu: &mut rust_imsai_emulator::Imsai8080,
+    cmd: Option<&str>,
+    max_instructions: u64,
+) {
     // Disable video rendering (we capture console output directly)
     emu.bus.console().set_auto_render(false);
 
@@ -1334,7 +1514,11 @@ fn run_scripted(emu: &mut rust_imsai_emulator::Imsai8080, cmd: Option<&str>, max
     }
 
     let elapsed = start_time.elapsed();
-    eprintln!("Executed {} instructions in {:.2}s", count, elapsed.as_secs_f64());
+    eprintln!(
+        "Executed {} instructions in {:.2}s",
+        count,
+        elapsed.as_secs_f64()
+    );
     eprintln!("Final PC: 0x{:04X}", emu.cpu.pc);
     eprintln!();
     println!("=== CONSOLE OUTPUT ===");

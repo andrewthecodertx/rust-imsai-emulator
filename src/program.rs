@@ -33,29 +33,20 @@ pub fn parse_hex_bytes(s: &str) -> Result<Vec<u8>, String> {
 #[serde(tag = "action")]
 #[serde(rename_all = "snake_case")]
 pub enum PanelStep {
-    /// Set address and data switches, press DEPOSIT.
     Deposit { address: String, data: String },
-    /// Set data switches, press DEPOSIT NEXT (auto-advances address).
     DepositNext { data: String },
-    /// Set address switches, press EXAMINE.
     Examine { address: String },
-    /// Press EXAMINE NEXT.
     ExamineNext,
-    /// Set address switches, press RUN/STOP.
     Run { address: String },
-    /// Load raw bytes into memory starting at address (bypasses front panel).
     Load { address: String, data: String },
 }
 
 /// A front panel program: named sequence of steps.
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub struct PanelProgram {
-    /// Program name (shown in UI).
     pub name: String,
-    /// Program description.
     #[serde(default)]
     pub description: String,
-    /// Steps to execute in order.
     pub steps: Vec<PanelStep>,
 }
 
@@ -172,3 +163,4 @@ pub fn memory_to_program(emu: &Imsai8080, start: u16, len: u16) -> PanelProgram 
         steps,
     }
 }
+
