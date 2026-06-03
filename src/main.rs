@@ -105,7 +105,9 @@ fn main() {
             Ok(prog) => {
                 let start = find_program_start(&prog).unwrap_or(0);
                 eprintln!("Loaded program: {} (start at 0x{:04X})", prog.name, start);
-                execute_panel_program(&mut emu, &prog);
+                if let Err(e) = execute_panel_program(&mut emu, &prog) {
+                    eprintln!("Program execution error: {}", e);
+                }
                 start_pc = Some(start);
             }
             Err(e) => {
@@ -891,15 +893,15 @@ fn run_command(
                 Ok(prog) => {
                     let start = find_program_start(&prog).unwrap_or(0);
                     reset_console_for_new_program(emu);
-                    execute_panel_program(emu, &prog);
-                    emu.cpu.pc = start;
-                    emu.cpu.halted = false;
-                    *program_name = prog.name.clone();
-                    // Close the modal so the TUI's main loop resumes and the
-                    // program actually runs (matching the `load` command).
-                    // Without this the program sits loaded-but-paused and the
-                    // screen stays blank.
-                    close(format!("Running {} (PC={:04X})...", prog.name, start))
+                    match execute_panel_program(emu, &prog) {
+                        Ok(()) => {
+                            emu.cpu.pc = start;
+                            emu.cpu.halted = false;
+                            *program_name = prog.name.clone();
+                            close(format!("Running {} (PC={:04X})...", prog.name, start))
+                        }
+                        Err(e) => stay(format!("Program error: {}", e)),
+                    }
                 }
                 Err(e) => stay(format!("Error: {}", e)),
             }

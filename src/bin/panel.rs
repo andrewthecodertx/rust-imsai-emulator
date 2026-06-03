@@ -300,7 +300,9 @@ fn main() {
         match load_program_file(&pbuf) {
             Ok(prog) => {
                 eprintln!("Loaded program: {}", prog.name);
-                execute_panel_program(&mut emu, &prog);
+                if let Err(e) = execute_panel_program(&mut emu, &prog) {
+                    eprintln!("Program execution error: {}", e);
+                }
                 // Set address switches to start address of program
                 if let Some(start_addr) = find_program_start(&prog) {
                     for i in 0..16 {
@@ -677,7 +679,9 @@ fn main() {
                                 emu.panel.is_running()
                             );
                             emu = Imsai8080::new();
-                            execute_panel_program(&mut emu, &prog);
+                            if let Err(e) = execute_panel_program(&mut emu, &prog) {
+                                eprintln!("Program execution error: {}", e);
+                            }
                             eprintln!(
                                 "After execute: PC=0x{:04X}, running={}",
                                 emu.cpu.pc,

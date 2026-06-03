@@ -66,25 +66,33 @@ pub fn save_program_file(prog: &PanelProgram, path: &Path) -> Result<(), String>
 }
 
 /// Execute a panel program on the emulator.
-pub fn execute_panel_program(emu: &mut Imsai8080, prog: &PanelProgram) {
-    for step in &prog.steps {
+///
+/// Returns the first error encountered, with the step index and
+/// a description of what went wrong. A malformed program stops
+/// execution rather than silently writing garbage to memory.
+pub fn execute_panel_program(emu: &mut Imsai8080, prog: &PanelProgram) -> Result<(), String> {
+    for (i, step) in prog.steps.iter().enumerate() {
         match step {
             PanelStep::Deposit { address, data } => {
-                let addr = parse_hex16(address).unwrap_or(0);
-                let byte = parse_hex8(data).unwrap_or(0);
+                let addr = parse_hex16(address)
+                    .map_err(|e| format!("Step {}: deposit address: {}", i, e))?;
+                let byte = parse_hex8(data)
+                    .map_err(|e| format!("Step {}: deposit data: {}", i, e))?;
                 emu.panel.set_address_switches(addr);
                 emu.panel.set_data_switches(byte);
                 emu.panel.press_switch(PanelSwitch::Deposit);
                 emu.process_panel();
             }
             PanelStep::DepositNext { data } => {
-                let byte = parse_hex8(data).unwrap_or(0);
+                let byte = parse_hex8(data)
+                    .map_err(|e| format!("Step {}: deposit_next data: {}", i, e))?;
                 emu.panel.set_data_switches(byte);
                 emu.panel.press_switch(PanelSwitch::DepositNext);
                 emu.process_panel();
             }
             PanelStep::Examine { address } => {
-                let addr = parse_hex16(address).unwrap_or(0);
+                let addr = parse_hex16(address)
+                    .map_err(|e| format!("Step {}: examine address: {}", i, e))?;
                 emu.panel.set_address_switches(addr);
                 emu.panel.press_switch(PanelSwitch::Examine);
                 emu.process_panel();
@@ -94,19 +102,22 @@ pub fn execute_panel_program(emu: &mut Imsai8080, prog: &PanelProgram) {
                 emu.process_panel();
             }
             PanelStep::Run { address } => {
-                let addr = parse_hex16(address).unwrap_or(0);
+                let addr = parse_hex16(address)
+                    .map_err(|e| format!("Step {}: run address: {}", i, e))?;
                 emu.panel.set_address_switches(addr);
                 emu.panel.press_switch(PanelSwitch::RunStop);
                 emu.process_panel();
             }
             PanelStep::Load { address, data } => {
-                let addr = parse_hex16(address).unwrap_or(0);
-                if let Ok(bytes) = parse_hex_bytes(data) {
-                    emu.load_program(addr, &bytes);
-                }
+                let addr = parse_hex16(address)
+                    .map_err(|e| format!("Step {}: load address: {}", i, e))?;
+                let bytes = parse_hex_bytes(data)
+                    .map_err(|e| format!("Step {}: load data: {}", i, e))?;
+                emu.load_program(addr, &bytes);
             }
         }
     }
+    Ok(())
 }
 
 /// Find the start address from a panel program (first "run", "deposit", or "load" step).
@@ -161,6 +172,121 @@ pub fn memory_to_program(emu: &Imsai8080, start: u16, len: u16) -> PanelProgram 
         name: format!("dump_{:04X}", start),
         description: format!("Memory dump from 0x{:04X}, {} bytes", start, len),
         steps,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_emu() -> Imsai8080 {
+        Imsai8080::new()
+    }
+
+    #[test]
+    fn test_valid_program_executes() {
+        let mut emu = make_emu();
+        let prog = PanelProgram {
+            name: "test".to_string(),
+            description: String::new(),
+            steps: vec![
+                PanelStep::Load {
+                    address: "0000".to_string(),
+                    data: "3E 41 D3 00 C3 00 00".to_string(),
+                },
+                PanelStep::Run { address: "0000".to_string() },
+            ],
+        };
+        assert!(execute_panel_program(&mut emu, &prog).is_ok());
+        // Byte at 0x0000 should be 0x3E (MVI A)
+        assert_eq!(emu.bus.mem_read(0x0000), 0x3E);
+    }
+
+    #[test]
+    fn test_invalid_address_returns_error() {
+        let mut emu = make_emu();
+        let prog = PanelProgram {
+            name: "bad".to_string(),
+            description: String::new(),
+            steps: vec![
+                PanelStep::Deposit {
+                    address: "ZZZZ".to_string(),
+                    data: "41".to_string(),
+                },
+            ],
+        };
+        let result = execute_panel_program(&mut emu, &prog);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("deposit address"));
+    }
+
+    #[test]
+    fn test_invalid_data_returns_error() {
+        let mut emu = make_emu();
+        let prog = PanelProgram {
+            name: "bad".to_string(),
+            description: String::new(),
+            steps: vec![
+                PanelStep::Deposit {
+                    address: "0100".to_string(),
+                    data: "ZZ".to_string(),
+                },
+            ],
+        };
+        let result = execute_panel_program(&mut emu, &prog);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("deposit data"));
+    }
+
+    #[test]
+    fn test_invalid_load_hex_returns_error() {
+        let mut emu = make_emu();
+        let prog = PanelProgram {
+            name: "bad".to_string(),
+            description: String::new(),
+            steps: vec![
+                PanelStep::Load {
+                    address: "0100".to_string(),
+                    data: "3E ZZ".to_string(),
+                },
+            ],
+        };
+        let result = execute_panel_program(&mut emu, &prog);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("load data"));
+    }
+
+    #[test]
+    fn test_invalid_run_address_returns_error() {
+        let mut emu = make_emu();
+        let prog = PanelProgram {
+            name: "bad".to_string(),
+            description: String::new(),
+            steps: vec![
+                PanelStep::Run { address: "GGGG".to_string() },
+            ],
+        };
+        let result = execute_panel_program(&mut emu, &prog);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("run address"));
+    }
+
+    #[test]
+    fn test_error_includes_step_index() {
+        let mut emu = make_emu();
+        let prog = PanelProgram {
+            name: "bad".to_string(),
+            description: String::new(),
+            steps: vec![
+                PanelStep::Deposit { address: "0100".to_string(), data: "41".to_string() },
+                PanelStep::Load { address: "XXXX".to_string(), data: "3E".to_string() },
+            ],
+        };
+        let result = execute_panel_program(&mut emu, &prog);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        // Step 1 (0-indexed) should be the failing one
+        assert!(err.contains("Step 1"), "Expected step index in error: {}", err);
     }
 }
 
