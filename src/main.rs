@@ -23,7 +23,7 @@ fn print_usage(args: &Vec<String>) {
     );
     eprintln!();
     eprintln!("Mode (choose one):");
-    eprintln!("  --binary <file> [addr]     Load raw binary at address (default 0x0000)");
+    eprintln!("  --load <file> [addr]      Load raw binary at address (default 0x0000)");
     eprintln!("  --program <file.json>      Load a front panel program (.json)");
     eprintln!("  (no arguments)             Start with saved memory (or empty if first run)");
     eprintln!();
@@ -62,10 +62,10 @@ fn main() {
         .and_then(|i| args.get(i + 1))
         .map(|s| s.clone());
 
-    // --binary <file> [addr]: load raw binary at address
+    // --load <file> [addr]: load raw binary at address
     let load_arg = args
         .iter()
-        .position(|a| a == "--binary")
+        .position(|a| a == "--load")
         .and_then(|i| args.get(i + 1))
         .map(|s| s.to_string());
 
@@ -209,27 +209,27 @@ fn run_step_trace(emu: &mut rust_imsai_emulator::Imsai8080, max: u64) {
 
         let desc = match op {
             0xC3 => {
-                let lo = emu.bus.mem_read(pc + 1);
-                let hi = emu.bus.mem_read(pc + 2);
+                let lo = emu.bus.mem_read(pc.wrapping_add(1));
+                let hi = emu.bus.mem_read(pc.wrapping_add(2));
                 format!("JMP 0x{:02X}{:02X}", hi, lo)
             }
             0xCD => {
-                let lo = emu.bus.mem_read(pc + 1);
-                let hi = emu.bus.mem_read(pc + 2);
+                let lo = emu.bus.mem_read(pc.wrapping_add(1));
+                let hi = emu.bus.mem_read(pc.wrapping_add(2));
                 format!("CALL 0x{:02X}{:02X}", hi, lo)
             }
             0xC9 => "RET".to_string(),
             0xD3 => {
-                let port = emu.bus.mem_read(pc + 1);
+                let port = emu.bus.mem_read(pc.wrapping_add(1));
                 format!("OUT 0x{:02X},A=0x{:02X}", port, emu.cpu.a)
             }
             0xDB => {
-                let port = emu.bus.mem_read(pc + 1);
+                let port = emu.bus.mem_read(pc.wrapping_add(1));
                 format!("IN A,0x{:02X}", port)
             }
             0x31 => {
-                let lo = emu.bus.mem_read(pc + 1);
-                let hi = emu.bus.mem_read(pc + 2);
+                let lo = emu.bus.mem_read(pc.wrapping_add(1));
+                let hi = emu.bus.mem_read(pc.wrapping_add(2));
                 format!("LXI SP,0x{:02X}{:02X}", hi, lo)
             }
             0x00 => "NOP".to_string(),
@@ -268,10 +268,10 @@ fn run_diag(emu: &mut rust_imsai_emulator::Imsai8080, max: u64) {
         count += 1;
 
         if op == 0xD3 {
-            let port = emu.bus.mem_read(pc + 1);
+            let port = emu.bus.mem_read(pc.wrapping_add(1));
             io_log.push((count, port, emu.cpu.a, true));
         } else if op == 0xDB {
-            let port = emu.bus.mem_read(pc + 1);
+            let port = emu.bus.mem_read(pc.wrapping_add(1));
             io_log.push((count, port, emu.cpu.a, false));
         }
 
@@ -992,7 +992,7 @@ fn dump_memory(emu: &rust_imsai_emulator::Imsai8080, start: u16, len: usize, lab
         if i > 0 && i % 16 == 0 {
             print!("\n        ");
         }
-        print!("{:02X} ", emu.bus.mem_read(start + i as u16));
+        print!("{:02X} ", emu.bus.mem_read(start.wrapping_add(i as u16)));
     }
     println!();
 }
@@ -1072,8 +1072,8 @@ fn run_pc_trace(emu: &mut rust_imsai_emulator::Imsai8080, max: u64) {
 
         // Detect CALL 5
         if op == 0xCD {
-            let lo = emu.bus.mem_read(pc + 1);
-            let hi = emu.bus.mem_read(pc + 2);
+            let lo = emu.bus.mem_read(pc.wrapping_add(1));
+            let hi = emu.bus.mem_read(pc.wrapping_add(2));
             let target = lo as u16 | (hi as u16) << 8;
             if target == 0x0005 {
                 call5_count += 1;
@@ -1083,10 +1083,10 @@ fn run_pc_trace(emu: &mut rust_imsai_emulator::Imsai8080, max: u64) {
 
         // Detect I/O
         if op == 0xD3 {
-            let port = emu.bus.mem_read(pc + 1);
+            let port = emu.bus.mem_read(pc.wrapping_add(1));
             io_log.push((count, port, a, true));
         } else if op == 0xDB {
-            let port = emu.bus.mem_read(pc + 1);
+            let port = emu.bus.mem_read(pc.wrapping_add(1));
             io_log.push((count, port, a, false));
         }
 
@@ -1420,7 +1420,7 @@ fn run_verbose_trace(emu: &mut rust_imsai_emulator::Imsai8080, max: u64) {
         count += 1;
 
         if op == 0xD3 {
-            let port = emu.bus.mem_read(pc + 1);
+            let port = emu.bus.mem_read(pc.wrapping_add(1));
             if port == 0x00
                 && (emu.cpu.a >= 32 && emu.cpu.a < 127 || emu.cpu.a == 0x0D || emu.cpu.a == 0x0A)
             {
@@ -1432,7 +1432,7 @@ fn run_verbose_trace(emu: &mut rust_imsai_emulator::Imsai8080, max: u64) {
                 }
             }
         } else if op == 0xDB {
-            let port = emu.bus.mem_read(pc + 1);
+            let port = emu.bus.mem_read(pc.wrapping_add(1));
             if port == 0x01 || port == 0xF9 {
                 // Console/disk status polling - too noisy
             } else if (0x48..=0x4B).contains(&port) || (0xF8..=0xFD).contains(&port) {
@@ -1481,7 +1481,7 @@ fn run_scripted(
 
         // Capture console output (port 0x00 or 0x7B OUT)
         if op == 0xD3 {
-            let port = emu.bus.mem_read(pc + 1);
+            let port = emu.bus.mem_read(pc.wrapping_add(1));
             if port == 0x00 || port == 0x7B {
                 let ch = emu.cpu.a;
                 if ch == 0x0D {
@@ -1500,7 +1500,7 @@ fn run_scripted(
 
         // Track disk I/O for debugging: log READ commands
         if op == 0xD3 {
-            let port = emu.bus.mem_read(pc + 1);
+            let port = emu.bus.mem_read(pc.wrapping_add(1));
             if port == 0x48 && emu.cpu.a == 0x80 {
                 let track = emu.bus.tarbell().current_track();
                 let sector = emu.bus.tarbell().current_sector();
@@ -1538,7 +1538,7 @@ fn dump_memory_eprint(emu: &rust_imsai_emulator::Imsai8080, start: u16, len: usi
         if i > 0 && i % 16 == 0 {
             eprint!("\n        ");
         }
-        eprint!("{:02X} ", emu.bus.mem_read(start + i as u16));
+        eprint!("{:02X} ", emu.bus.mem_read(start.wrapping_add(i as u16)));
     }
     eprintln!();
 }

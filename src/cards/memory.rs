@@ -113,6 +113,12 @@ pub fn load_memory_from_file(ram: &mut [u8; 65536], path: &Path) -> std::io::Res
     let segments: Vec<MemorySegment> = serde_json::from_str(&contents)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
     for seg in segments {
+        if seg.data.len() % 2 != 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("Odd-length hex string at address 0x{:04X}", seg.addr),
+            ));
+        }
         let bytes: Vec<u8> = (0..seg.data.len())
             .step_by(2)
             .map(|i| u8::from_str_radix(&seg.data[i..i+2], 16))
@@ -230,5 +236,23 @@ mod tests {
         assert!(result.is_ok());
         // RAM should still be all 0xFF
         assert_eq!(ram[0], 0xFF);
+    }
+
+    #[test]
+    fn test_load_rejects_odd_length_hex() {
+        let dir = std::env::temp_dir().join("imsai_memory_test_odd_hex");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("odd_hex.json");
+
+        // Write a JSON file with an odd-length hex string
+        std::fs::write(&path, r#"[{"addr":0,"data":"ABC"}]"#).unwrap();
+
+        let mut ram = [0xFFu8; 65536];
+        let result = load_memory_from_file(&mut ram, &path);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 }
