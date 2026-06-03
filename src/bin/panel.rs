@@ -361,7 +361,6 @@ fn main() {
     let mut tcx: usize = 0;
     let mut tcy: usize = 0;
 
-    let mut running = false;
     let mut cycles: u64 = 0;
     let mut step_pending = false;
     let mut status_msg = String::new();
@@ -697,7 +696,6 @@ fn main() {
                             tcx = 0;
                             tcy = 0;
                             // If the program has a "run" step, the front panel is already in RUN mode
-                            running = emu.panel.is_running();
                             status_msg =
                                 format!("Loaded: {} (PC={:04X})", program_name, emu.cpu.pc);
                             status_msg_timer = 180;
@@ -760,7 +758,7 @@ fn main() {
         // R: Cold reset (clear memory, STOPPED, delete saved state).
         // Suppressed while running so typing an 'R' at a console prompt
         // (e.g. CP/M's DIR) doesn't wipe the machine -- stop with F5 first.
-        if matches!(picker, PickerState::Closed) && !running && rl.is_key_pressed(KeyboardKey::KEY_R) {
+        if matches!(picker, PickerState::Closed) && (emu.panel.is_stopped() || emu.cpu.halted) && rl.is_key_pressed(KeyboardKey::KEY_R) {
             emu = Imsai8080::new();
             emu.panel.set_address_switches(0x0000);
             emu.process_panel();
@@ -769,7 +767,6 @@ fn main() {
             term = [[0x20u8; TERM_COLS]; TERM_ROWS];
             tcx = 0;
             tcy = 0;
-            running = false;
             program_name.clear();
             // Delete saved memory so next start is truly clean
             let _ = std::fs::remove_file(MEMORY_FILE);
@@ -783,7 +780,7 @@ fn main() {
         // - Ctrl+<A..Z> are sent as control codes 0x01..0x1A (so Ctrl+C warm
         //   boot, Ctrl+S/Ctrl+Q flow control, etc. reach the guest).
         // - Enter/Backspace/Tab/Esc are mapped to CR/DEL/HT/ESC.
-        if running && matches!(picker, PickerState::Closed) {
+        if emu.panel.is_running() && !emu.cpu.halted && matches!(picker, PickerState::Closed) {
             let ctrl = rl.is_key_down(KeyboardKey::KEY_LEFT_CONTROL)
                 || rl.is_key_down(KeyboardKey::KEY_RIGHT_CONTROL);
 
@@ -851,8 +848,7 @@ fn main() {
         // not halted (HLT). run_batch stops on HLT, so once halted it returns
         // 0 and the cycle counter freezes; the front panel LEDs already show
         // the halt state (RUN off, WAIT + HLTA on).
-        running = emu.panel.is_running() && !emu.cpu.halted;
-        if running {
+        if emu.panel.is_running() && !emu.cpu.halted {
             cycles += emu.run_batch(10000);
         }
         // Always service the UART so any bytes still in the transmitter shift

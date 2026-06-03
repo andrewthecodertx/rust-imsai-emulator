@@ -189,6 +189,17 @@ impl SerialCard {
             _ => {}
         }
     }
+
+    /// Check if this card owns the given I/O port.
+    pub fn owns_port(&self, port: u8) -> bool {
+        matches!(port, 0x00..=0x03 | 0x79 | 0x7B)
+    }
+
+    /// Check if this card owns the given memory address (never does for serial).
+    pub fn owns_address(&self, _addr: u16) -> bool { false }
+
+    /// Card name for debugging/display.
+    pub fn name(&self) -> &'static str { "SIO-2 Serial" }
 }
 
 #[cfg(test)]

@@ -111,29 +111,22 @@ impl TarbellCard {
             _ => {}
         }
     }
-}
 
-impl super::Card for TarbellCard {
-    fn io_read(&mut self, port: u8) -> u8 { self.io_read(port) }
-    fn io_write(&mut self, port: u8, value: u8) { self.io_write(port, value) }
-
-    fn owns_port(&self, port: u8) -> bool {
+    /// Check if this card owns the given I/O port.
+    pub fn owns_port(&self, port: u8) -> bool {
         matches!(port, 0x48..=0x4B | 0xF8..=0xFD | 0xFF)
     }
 
-    fn mem_read(&self, _addr: u16) -> Option<u8> { None }
-    fn mem_write(&mut self, _addr: u16, _value: u8) -> bool { false }
-    fn owns_address(&self, _addr: u16) -> bool { false }
+    /// Check if this card owns the given memory address (never does for Tarbell).
+    pub fn owns_address(&self, _addr: u16) -> bool { false }
 
-    fn name(&self) -> &'static str { "Tarbell 1011" }
-    fn as_any_mut(&mut self) -> &mut dyn std::any::Any { self }
-    fn as_any(&self) -> &dyn std::any::Any { self }
+    /// Card name for debugging/display.
+    pub fn name(&self) -> &'static str { "Tarbell 1011" }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cards::Card;
 
     #[test]
     fn test_tarbell_card_port_decode() {
