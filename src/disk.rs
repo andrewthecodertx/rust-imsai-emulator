@@ -261,7 +261,7 @@ mod tests {
 
     #[test]
     fn test_data_mut_marks_dirty() {
-        let mut disk = DiskImage::new_formatted();
+        let disk = DiskImage::new_formatted();
         assert!(disk.is_dirty());
     }
 }
