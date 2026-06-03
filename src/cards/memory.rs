@@ -39,12 +39,12 @@ impl MemoryCard {
         Self { ram: [0x00; 65536] }
     }
 
-    /// Read a byte from RAM.
+    /// Read a byte from RAM (direct array access, no dispatch).
     pub fn read(&self, addr: u16) -> u8 {
         self.ram[addr as usize]
     }
 
-    /// Write a byte to RAM.
+    /// Write a byte to RAM (direct array access, no dispatch).
     pub fn write(&mut self, addr: u16, value: u8) {
         self.ram[addr as usize] = value;
     }
@@ -59,9 +59,7 @@ impl super::Card for MemoryCard {
     fn io_write(&mut self, _port: u8, _value: u8) {}
     fn owns_port(&self, _port: u8) -> bool { false }
 
-    fn mem_read(&self, addr: u16) -> Option<u8> {
-        Some(self.ram[addr as usize])
-    }
+    fn mem_read(&self, addr: u16) -> Option<u8> { Some(self.ram[addr as usize]) }
     fn mem_write(&mut self, addr: u16, value: u8) -> bool {
         self.ram[addr as usize] = value;
         true
@@ -79,13 +77,11 @@ pub fn save_memory_to_file(ram: &[u8; 65536], path: &Path) -> std::io::Result<()
     let mut i: usize = 0;
     while i < 65536 {
         if ram[i] != 0xFF {
-            // Start of a non-0xFF region
             let start = i;
             let mut end = i;
             while end < 65536 && ram[end] != 0xFF {
                 end += 1;
             }
-            // Encode as hex string for compactness
             let hex: String = ram[start..end]
                 .iter()
                 .map(|b| format!("{:02X}", b))
@@ -161,15 +157,11 @@ mod tests {
     #[test]
     fn test_memory_card_bus_interface() {
         let mut card = MemoryCard::new();
-        // Memory card doesn't own any I/O ports
         assert!(!card.owns_port(0x00));
         assert!(!card.owns_port(0xFF));
-        // IO reads return 0xFF (no ports)
         assert_eq!(card.io_read(0x00), 0xFF);
-        // Memory card owns all addresses
         assert!(card.owns_address(0x0000));
         assert!(card.owns_address(0xFFFF));
-        // Bus read/write through Card trait
         assert_eq!(card.mem_read(0x0100).unwrap(), 0xFF);
         card.mem_write(0x0100, 0xAA);
         assert_eq!(card.mem_read(0x0100).unwrap(), 0xAA);
@@ -188,18 +180,16 @@ mod tests {
         let path = dir.join("test_memory.json");
 
         let mut ram = [0xFFu8; 65536];
-        // Write some data at scattered addresses
-        ram[0x0000] = 0xC3; // JMP
+        ram[0x0000] = 0xC3;
         ram[0x0001] = 0x00;
         ram[0x0002] = 0x01;
-        ram[0x0100] = 0x3E; // MVI A
-        ram[0x0101] = 0x41; // 'A'
+        ram[0x0100] = 0x3E;
+        ram[0x0101] = 0x41;
         ram[0xFFFF] = 0x00;
 
         save_memory_to_file(&ram, &path).unwrap();
         assert!(path.exists());
 
-        // Load into fresh RAM
         let mut ram2 = [0xFFu8; 65536];
         load_memory_from_file(&mut ram2, &path).unwrap();
         assert_eq!(ram2[0x0000], 0xC3);
@@ -208,7 +198,6 @@ mod tests {
         assert_eq!(ram2[0x0100], 0x3E);
         assert_eq!(ram2[0x0101], 0x41);
         assert_eq!(ram2[0xFFFF], 0x00);
-        // 0xFF regions should remain untouched
         assert_eq!(ram2[0x0200], 0xFF);
 
         std::fs::remove_dir_all(&dir).ok();
@@ -223,7 +212,6 @@ mod tests {
         let ram = [0xFFu8; 65536];
         save_memory_to_file(&ram, &path).unwrap();
         let contents = std::fs::read_to_string(&path).unwrap();
-        // Empty memory produces just "[]"
         assert_eq!(contents.trim(), "[]");
 
         std::fs::remove_dir_all(&dir).ok();
@@ -234,7 +222,6 @@ mod tests {
         let mut ram = [0xFFu8; 65536];
         let result = load_memory_from_file(&mut ram, Path::new("/nonexistent/file.json"));
         assert!(result.is_ok());
-        // RAM should still be all 0xFF
         assert_eq!(ram[0], 0xFF);
     }
 
@@ -244,7 +231,6 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("odd_hex.json");
 
-        // Write a JSON file with an odd-length hex string
         std::fs::write(&path, r#"[{"addr":0,"data":"ABC"}]"#).unwrap();
 
         let mut ram = [0xFFu8; 65536];

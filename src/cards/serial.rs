@@ -168,57 +168,42 @@ impl Default for SerialCard {
     fn default() -> Self { Self::new() }
 }
 
-impl super::Card for SerialCard {
-    fn io_read(&mut self, port: u8) -> u8 {
+// Inherent I/O methods for direct dispatch (no trait object needed).
+impl SerialCard {
+    /// Read from an I/O port this card owns.
+    pub fn io_read(&mut self, port: u8) -> u8 {
         // Service the UART on every read from console ports.
-        // This drains the TX buffer (restoring TxRDY) and handles
-        // keyboard input, but does NOT consume the output buffer.
         if matches!(port, 0x00 | 0x01 | 0x79) {
             self.service_uart();
         }
 
         match port {
-            // Channel A data (console input/output)
             0x00 => self.channel_a.read_data(),
-            // Channel A command/status
             0x01 => self.channel_a.read_status(),
-            // Port 0x79: alias for Channel A status
             0x79 => self.channel_a.read_status(),
-            // Port 0x7B: alias for Channel A data (read)
             0x7B => self.channel_a.read_data(),
-            // Channel B data
             0x02 => self.channel_b.read_data(),
-            // Channel B command/status
             0x03 => self.channel_b.read_status(),
             _ => 0xFF,
         }
     }
 
-    fn io_write(&mut self, port: u8, value: u8) {
+    /// Write to an I/O port this card owns.
+    pub fn io_write(&mut self, port: u8, value: u8) {
         match port {
-            // Channel A data (console output)
-            0x00 => {
-                self.channel_a.write_data(value);
-            }
-            // Channel A command
-            0x01 => {
-                self.channel_a.write_control(value);
-            }
-            // Port 0x7B: alias for Channel A data output
-            0x7B => {
-                self.channel_a.write_data(value);
-            }
-            // Channel B data
-            0x02 => {
-                self.channel_b.write_data(value);
-            }
-            // Channel B command
-            0x03 => {
-                self.channel_b.write_control(value);
-            }
+            0x00 => self.channel_a.write_data(value),
+            0x01 => self.channel_a.write_control(value),
+            0x7B => self.channel_a.write_data(value),
+            0x02 => self.channel_b.write_data(value),
+            0x03 => self.channel_b.write_control(value),
             _ => {}
         }
     }
+}
+
+impl super::Card for SerialCard {
+    fn io_read(&mut self, port: u8) -> u8 { self.io_read(port) }
+    fn io_write(&mut self, port: u8, value: u8) { self.io_write(port, value) }
 
     fn owns_port(&self, port: u8) -> bool {
         matches!(port, 0x00 | 0x01 | 0x02 | 0x03 | 0x79 | 0x7B)

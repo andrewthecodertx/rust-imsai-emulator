@@ -106,37 +106,38 @@ impl Default for TarbellCard {
     fn default() -> Self { Self::new() }
 }
 
-impl super::Card for TarbellCard {
-    fn io_read(&mut self, port: u8) -> u8 {
+// Inherent I/O methods for direct dispatch (no trait object needed).
+impl TarbellCard {
+    /// Read from an I/O port this card owns.
+    pub fn io_read(&mut self, port: u8) -> u8 {
         match port {
-            // FD1771 register ports (primary + aliases)
             0x48..=0x4B | 0xF8..=0xFB => {
                 let offset = Self::port_to_fd1771_offset(port).unwrap();
                 self.fdc.read_register(offset)
             }
-            // Tarbell board DRQ/wait status port (CMI5619 boot ROM compatible)
-            // Bit 7 set = DRQ active (data byte ready to read/write)
-            // Bit 7 clear = transfer complete
             0xFC => self.fdc.is_drq_active() as u8 | 0x00,
-            // Fixed-value ports used by certain boot ROMs
             0xFD => 0x00,
             0xFF => 0x03,
             _ => 0xFF,
         }
     }
 
-    fn io_write(&mut self, port: u8, value: u8) {
+    /// Write to an I/O port this card owns.
+    pub fn io_write(&mut self, port: u8, value: u8) {
         match port {
-            // FD1771 register ports (primary + aliases)
             0x48..=0x4B | 0xF8..=0xFB => {
                 let offset = Self::port_to_fd1771_offset(port).unwrap();
                 self.fdc.write_register(offset, value);
             }
-            // Auxiliary ports: read-only or unused, ignore writes
             0xFC | 0xFD | 0xFF => {}
             _ => {}
         }
     }
+}
+
+impl super::Card for TarbellCard {
+    fn io_read(&mut self, port: u8) -> u8 { self.io_read(port) }
+    fn io_write(&mut self, port: u8, value: u8) { self.io_write(port, value) }
 
     fn owns_port(&self, port: u8) -> bool {
         matches!(port, 0x48..=0x4B | 0xF8..=0xFD | 0xFF)

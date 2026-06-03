@@ -1,4 +1,3 @@
-use rust_imsai_emulator::TarbellCard;
 use rust_imsai_emulator::{execute_panel_program, find_program_start, load_program_file};
 use rust_imsai_emulator::{load_memory_from_file, save_memory_to_file};
 
@@ -49,7 +48,7 @@ fn main() {
     } else {
         let mem_path = std::path::Path::new("imsai_memory.json");
         if mem_path.exists() {
-            match load_memory_from_file(&mut emu.bus.memory().ram, mem_path) {
+            match load_memory_from_file(&mut emu.bus.memory.ram, mem_path) {
                 Ok(()) => eprintln!("Restored memory from {}", mem_path.display()),
                 Err(e) => eprintln!("Warning: failed to load {}: {}", mem_path.display(), e),
             }
@@ -60,7 +59,7 @@ fn main() {
     }
 
     if let Some(ref path) = args.disk_path {
-        match emu.bus.card_mut::<TarbellCard>().expect("Tarbell card").insert_disk(0, path) {
+            match emu.bus.insert_disk(0, path) {
             Ok(()) => eprintln!("Disk mounted in drive A: {}", path),
             Err(e) => {
                 eprintln!("Error mounting disk '{}': {}", path, e);
@@ -97,7 +96,7 @@ fn main() {
     }
 
     let mem_path = std::path::Path::new("imsai_memory.json");
-    match save_memory_to_file(&emu.bus.memory().ram, mem_path) {
+    match save_memory_to_file(&emu.bus.memory.ram, mem_path) {
         Ok(()) => eprintln!("Memory saved to {}", mem_path.display()),
         Err(e) => eprintln!("Warning: failed to save {}: {}", mem_path.display(), e),
     }

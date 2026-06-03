@@ -99,7 +99,6 @@ use raylib::math::Vector2;
 use raylib::text::RaylibFont;
 use rust_imsai_emulator::cards::PanelSwitch;
 use rust_imsai_emulator::Imsai8080;
-use rust_imsai_emulator::TarbellCard;
 use rust_imsai_emulator::save_memory_to_file;
 use rust_imsai_emulator::load_memory_from_file;
 
@@ -340,7 +339,7 @@ fn main() {
         // No program/disk/load specified: restore saved memory if it exists
         let mem_path = Path::new(MEMORY_FILE);
         if mem_path.exists() {
-            match load_memory_from_file(&mut emu.bus.memory().ram, mem_path) {
+            match load_memory_from_file(&mut emu.bus.memory.ram, mem_path) {
                 Ok(()) => eprintln!("Restored memory from {}", MEMORY_FILE),
                 Err(e) => eprintln!("Warning: failed to load {}: {}", MEMORY_FILE, e),
             }
@@ -352,7 +351,7 @@ fn main() {
 
     // Mount disk image if specified (orthogonal to program/load)
     if let Some(ref path) = disk_arg {
-        match emu.bus.card_mut::<TarbellCard>().expect("Tarbell card").insert_disk(0, path) {
+        match emu.bus.insert_disk(0, path) {
             Ok(()) => eprintln!("Disk mounted in drive A: {}", path),
             Err(e) => eprintln!("Error mounting disk '{}': {}", path, e),
         }
@@ -712,12 +711,7 @@ fn main() {
                 }
                 PickerAction::Mount(path) => {
                     let path_str = path.to_string_lossy().into_owned();
-                    match emu
-                        .bus
-                        .card_mut::<TarbellCard>()
-                        .expect("Tarbell card")
-                        .insert_disk(0, &path_str)
-                    {
+                    match emu.bus.insert_disk(0, &path_str) {
                         Ok(()) => {
                             let name = path
                                 .file_name()
@@ -1571,7 +1565,7 @@ fn main() {
 
     // Save memory state to file on exit
     let mem_path = Path::new(MEMORY_FILE);
-    match save_memory_to_file(&emu.bus.memory().ram, mem_path) {
+    match save_memory_to_file(&emu.bus.memory.ram, mem_path) {
         Ok(()) => eprintln!("Memory saved to {}", MEMORY_FILE),
         Err(e) => eprintln!("Warning: failed to save {}: {}", MEMORY_FILE, e),
     }

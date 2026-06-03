@@ -15,7 +15,6 @@ use crossterm::{
 };
 
 use rust_imsai_emulator::save_memory_to_file;
-use rust_imsai_emulator::TarbellCard;
 use rust_imsai_emulator::{execute_panel_program, find_program_start, load_program_file};
 
 /// Which content to show on the bottom row of the TUI.
@@ -38,7 +37,7 @@ pub struct CommandResult {
 /// Save memory to imsai_memory.json
 fn save_memory(emu: &mut rust_imsai_emulator::Imsai8080) {
     let mem_path = std::path::Path::new("imsai_memory.json");
-    match save_memory_to_file(&emu.bus.memory().ram, mem_path) {
+    match save_memory_to_file(&emu.bus.memory.ram, mem_path) {
         Ok(()) => eprintln!("Memory saved to {}", mem_path.display()),
         Err(e) => eprintln!("Warning: failed to save {}: {}", mem_path.display(), e),
     }
@@ -228,7 +227,7 @@ fn run_command(
                 Some(p) => *p,
                 None => return stay("Usage: mount <file>".to_string()),
             };
-            match emu.bus.card_mut::<TarbellCard>().expect("Tarbell card").insert_disk(0, path) {
+            match emu.bus.insert_disk(0, path) {
                 Ok(()) => close(format!("Disk mounted in drive A: {}", path)),
                 Err(e) => stay(format!("Error: {}", e)),
             }
