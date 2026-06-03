@@ -14,6 +14,11 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use rust_imsai_emulator::{
+    execute_panel_program, find_program_start, load_program_file,
+    memory_to_program, save_program_file,
+};
+
 /// State for the in-app file picker overlay.
 #[derive(Debug)]
 enum PickerState {
@@ -55,42 +60,6 @@ struct PickerEntry {
     path: PathBuf,
 }
 
-// === Front panel program format ===
-// A program is a saved sequence of switch positions and button presses,
-// exactly as you would operate the real IMSAI 8080 front panel.
-// The "load" action writes raw bytes at an address (like load_program).
-// The "step" actions set switches then press a button.
-
-/// One step in a front panel program.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "action")]
-#[serde(rename_all = "snake_case")]
-enum PanelStep {
-    /// Set address switches to this value, set data switches to this value,
-    /// then press DEPOSIT. Advances address by 1 (like real hardware).
-    Deposit { address: String, data: String },
-    /// Set data switches, press DEPOSIT NEXT. Address auto-advances.
-    DepositNext { data: String },
-    /// Set address switches, press EXAMINE. Reads byte at that address.
-    Examine { address: String },
-    /// Press EXAMINE NEXT. Reads next byte.
-    ExamineNext,
-    /// Set address switches, then press RUN/STOP to start execution.
-    Run { address: String },
-    /// Load raw bytes into memory starting at address (bypasses front panel).
-    /// Used for convenience when you don't want to toggle every byte.
-    Load { address: String, data: String },
-}
-
-/// A front panel program: named sequence of steps.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct PanelProgram {
-    name: String,
-    #[serde(default)]
-    description: String,
-    steps: Vec<PanelStep>,
-}
-
 fn default_programs_dir() -> PathBuf {
     // Look for programs/ relative to current working directory first,
     // then relative to the executable directory
@@ -123,35 +92,6 @@ fn disk_search_dirs() -> Vec<PathBuf> {
     dirs
 }
 
-fn load_program_file(path: &PathBuf) -> Result<PanelProgram, String> {
-    let contents = fs::read_to_string(path)
-        .map_err(|e| format!("Failed to read {}: {}", path.display(), e))?;
-    serde_json::from_str(&contents)
-        .map_err(|e| format!("Failed to parse {}: {}", path.display(), e))
-}
-
-fn save_program_file(prog: &PanelProgram, path: &PathBuf) -> Result<(), String> {
-    let json =
-        serde_json::to_string_pretty(prog).map_err(|e| format!("Failed to serialize: {}", e))?;
-    fs::write(path, json).map_err(|e| format!("Failed to write {}: {}", path.display(), e))
-}
-
-/// Parse a hex string like "3E" or "0x3E" into a u8.
-fn parse_hex8(s: &str) -> Result<u8, String> {
-    let s = s.trim().trim_start_matches("0x").trim_start_matches("0X");
-    u8::from_str_radix(s, 16).map_err(|e| format!("Invalid hex byte '{}': {}", s, e))
-}
-
-/// Parse a hex address like "0000" or "0x0000" into a u16.
-fn parse_hex16(s: &str) -> Result<u16, String> {
-    let s = s.trim().trim_start_matches("0x").trim_start_matches("0X");
-    u16::from_str_radix(s, 16).map_err(|e| format!("Invalid hex address '{}': {}", s, e))
-}
-
-/// Parse a hex data string like "3E 4E D3 01" into bytes.
-fn parse_hex_bytes(s: &str) -> Result<Vec<u8>, String> {
-    s.split_whitespace().map(|b| parse_hex8(b)).collect()
-}
 use raylib::consts::{KeyboardKey, MouseButton, TextureFilter};
 use raylib::core::texture::{RaylibRenderTexture2D, RaylibTexture2D};
 use raylib::drawing::RaylibTextureModeExt;
@@ -162,7 +102,7 @@ use rust_imsai_emulator::Imsai8080;
 use rust_imsai_emulator::TarbellCard;
 use rust_imsai_emulator::save_memory_to_file;
 use rust_imsai_emulator::load_memory_from_file;
-use serde::{Deserialize, Serialize};
+
 
 /// File where memory contents are persisted between sessions.
 const MEMORY_FILE: &str = "imsai_memory.json";
@@ -798,13 +738,7 @@ fn main() {
                     });
                     let start = addr_val;
                     let dump_len: u16 = 256;
-                    let prog = memory_to_program(
-                        &filename,
-                        &format!("Saved from {:04X}, {} bytes", start, dump_len),
-                        start,
-                        dump_len,
-                        &emu,
-                    );
+                    let prog = memory_to_program(&emu, start, dump_len);
                     if fs::create_dir_all(default_programs_dir()).is_ok() {
                         let save_path = default_programs_dir().join(format!("{}.json", filename));
                         match save_program_file(&prog, &save_path) {
@@ -1857,99 +1791,6 @@ fn draw_paddle(
             raylib::color::Color { r: 0, g: 0, b: 0, a: 70 },
         );
         d.draw_rectangle(x as i32 + 3, top_y + PADDLE_H - 9, PADDLE_W - 6, 4, lighten(base, 40));
-    }
-}
-
-/// Execute a front panel program: walk through each step, setting switches
-/// and pressing buttons via the front panel interface, just like a human would.
-fn execute_panel_program(emu: &mut Imsai8080, prog: &PanelProgram) {
-    for step in &prog.steps {
-        match step {
-            PanelStep::Deposit { address, data } => {
-                let addr = parse_hex16(address).unwrap_or(0);
-                let byte = parse_hex8(data).unwrap_or(0);
-                emu.panel.set_address_switches(addr);
-                emu.panel.set_data_switches(byte);
-                emu.panel.press_switch(PanelSwitch::Deposit);
-                emu.process_panel();
-            }
-            PanelStep::DepositNext { data } => {
-                let byte = parse_hex8(data).unwrap_or(0);
-                emu.panel.set_data_switches(byte);
-                emu.panel.press_switch(PanelSwitch::DepositNext);
-                emu.process_panel();
-            }
-            PanelStep::Examine { address } => {
-                let addr = parse_hex16(address).unwrap_or(0);
-                emu.panel.set_address_switches(addr);
-                emu.panel.press_switch(PanelSwitch::Examine);
-                emu.process_panel();
-            }
-            PanelStep::ExamineNext => {
-                emu.panel.press_switch(PanelSwitch::ExamineNext);
-                emu.process_panel();
-            }
-            PanelStep::Run { address } => {
-                let addr = parse_hex16(address).unwrap_or(0);
-                emu.panel.set_address_switches(addr);
-                emu.panel.press_switch(PanelSwitch::RunStop);
-                emu.process_panel();
-            }
-            PanelStep::Load { address, data } => {
-                let addr = parse_hex16(address).unwrap_or(0);
-                if let Ok(bytes) = parse_hex_bytes(data) {
-                    emu.load_program(addr, &bytes);
-                }
-            }
-        }
-    }
-}
-
-/// Find the start address from a panel program (first "run" or "deposit" step).
-fn find_program_start(prog: &PanelProgram) -> Option<u16> {
-    for step in &prog.steps {
-        match step {
-            PanelStep::Run { address } => return parse_hex16(address).ok(),
-            PanelStep::Deposit { address, .. } => return parse_hex16(address).ok(),
-            PanelStep::Load { address, .. } => return parse_hex16(address).ok(),
-            _ => {}
-        }
-    }
-    None
-}
-
-/// Build a panel program from the current memory contents.
-/// Dumps `len` bytes starting at `start` into a program with deposit_next steps.
-fn memory_to_program(
-    name: &str,
-    description: &str,
-    start: u16,
-    len: u16,
-    emu: &Imsai8080,
-) -> PanelProgram {
-    let mut steps = Vec::new();
-    // First byte uses deposit (sets address + data)
-    let first_byte = emu.bus.mem_read(start);
-    steps.push(PanelStep::Deposit {
-        address: format!("{:04X}", start),
-        data: format!("{:02X}", first_byte),
-    });
-    // Remaining bytes use deposit_next
-    for i in 1..len {
-        let addr = start.wrapping_add(i);
-        steps.push(PanelStep::Load {
-            address: format!("{:04X}", addr),
-            data: format!("{:02X}", emu.bus.mem_read(addr)),
-        });
-    }
-    // Run at start address
-    steps.push(PanelStep::Run {
-        address: format!("{:04X}", start),
-    });
-    PanelProgram {
-        name: name.to_string(),
-        description: description.to_string(),
-        steps,
     }
 }
 

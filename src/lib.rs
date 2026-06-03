@@ -25,6 +25,8 @@ pub mod dpb;
 pub mod emulator;
 /// I/O subsystem (keyboard, video)
 pub mod io;
+/// Front panel program loading and execution
+pub mod program;
 
 // Re-export the main components
 pub use bus::ImsaiBus;
@@ -36,3 +38,7 @@ pub use disk::DiskImage;
 pub use emulator::Imsai8080;
 pub use io::Keyboard;
 pub use io::VideoDisplay;
+pub use program::{
+    execute_panel_program, find_program_start, load_program_file, memory_to_program,
+    parse_hex8, parse_hex16, parse_hex_bytes, save_program_file, PanelProgram, PanelStep,
+};
