@@ -191,27 +191,9 @@ impl SerialCard {
     }
 }
 
-impl super::Card for SerialCard {
-    fn io_read(&mut self, port: u8) -> u8 { self.io_read(port) }
-    fn io_write(&mut self, port: u8, value: u8) { self.io_write(port, value) }
-
-    fn owns_port(&self, port: u8) -> bool {
-        matches!(port, 0x00 | 0x01 | 0x02 | 0x03 | 0x79 | 0x7B)
-    }
-
-    fn mem_read(&self, _addr: u16) -> Option<u8> { None }
-    fn mem_write(&mut self, _addr: u16, _value: u8) -> bool { false }
-    fn owns_address(&self, _addr: u16) -> bool { false }
-
-    fn name(&self) -> &'static str { "SIO-2 Serial" }
-    fn as_any_mut(&mut self) -> &mut dyn std::any::Any { self }
-    fn as_any(&self) -> &dyn std::any::Any { self }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cards::Card;
 
     #[test]
     fn test_serial_card_port_decode() {

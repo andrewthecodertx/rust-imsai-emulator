@@ -30,7 +30,7 @@ pub mod program;
 
 // Re-export the main components
 pub use bus::ImsaiBus;
-pub use cards::{Card, FrontPanel, IoEvent, MemoryCard, PanelLeds, PanelSwitch, RunState, SerialCard, TarbellCard};
+pub use cards::{FrontPanel, IoEvent, MemoryCard, PanelLeds, PanelSwitch, RunState, SerialCard, TarbellCard};
 pub use cards::{save_memory_to_file, load_memory_from_file};
 pub use chips::Fd1771;
 pub use chips::Uart8251;

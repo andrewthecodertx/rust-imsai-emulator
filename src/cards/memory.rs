@@ -47,23 +47,6 @@ impl Default for MemoryCard {
     fn default() -> Self { Self::new() }
 }
 
-impl super::Card for MemoryCard {
-    fn io_read(&mut self, _port: u8) -> u8 { 0xFF }
-    fn io_write(&mut self, _port: u8, _value: u8) {}
-    fn owns_port(&self, _port: u8) -> bool { false }
-
-    fn mem_read(&self, addr: u16) -> Option<u8> { Some(self.ram[addr as usize]) }
-    fn mem_write(&mut self, addr: u16, value: u8) -> bool {
-        self.ram[addr as usize] = value;
-        true
-    }
-    fn owns_address(&self, _addr: u16) -> bool { true }
-
-    fn name(&self) -> &'static str { "64K Memory" }
-    fn as_any_mut(&mut self) -> &mut dyn std::any::Any { self }
-    fn as_any(&self) -> &dyn std::any::Any { self }
-}
-
 /// Save memory to a JSON file. Only non-0xFF regions are stored (sparse format).
 pub fn save_memory_to_file(ram: &[u8; 65536], path: &Path) -> std::io::Result<()> {
     let mut segments: Vec<MemorySegment> = Vec::new();
@@ -124,7 +107,6 @@ pub fn load_memory_from_file(ram: &mut [u8; 65536], path: &Path) -> std::io::Res
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cards::Card;
 
     #[test]
     fn test_memory_card_new_is_ff() {
@@ -145,25 +127,6 @@ mod tests {
         let mut card = MemoryCard::new();
         card.write(0x0100, 0x42);
         assert_eq!(card.read(0x0100), 0x42);
-    }
-
-    #[test]
-    fn test_memory_card_bus_interface() {
-        let mut card = MemoryCard::new();
-        assert!(!card.owns_port(0x00));
-        assert!(!card.owns_port(0xFF));
-        assert_eq!(card.io_read(0x00), 0xFF);
-        assert!(card.owns_address(0x0000));
-        assert!(card.owns_address(0xFFFF));
-        assert_eq!(card.mem_read(0x0100).unwrap(), 0xFF);
-        card.mem_write(0x0100, 0xAA);
-        assert_eq!(card.mem_read(0x0100).unwrap(), 0xAA);
-    }
-
-    #[test]
-    fn test_memory_card_name() {
-        let card = MemoryCard::new();
-        assert_eq!(card.name(), "64K Memory");
     }
 
     #[test]
