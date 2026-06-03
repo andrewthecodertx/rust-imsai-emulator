@@ -391,14 +391,16 @@ pub fn run_verbose_trace(emu: &mut Imsai8080, max: u64) {
 pub fn run_interactive(emu: &mut Imsai8080, max_instructions: u64) {
     println!("IMSAI 8080 ({} instructions)", max_instructions);
 
+    if emu.panel.is_stopped() {
+        emu.panel.press_switch(rust_imsai_emulator::PanelSwitch::RunStop);
+        emu.process_panel();
+    }
+
     let mut count: u64 = 0;
     loop {
-        for _ in 0..1000 {
-            emu.step();
-            count += 1;
-        }
-
-        if emu.cpu.halted || count >= max_instructions {
+        let batch = emu.run_batch(1000.min(max_instructions - count));
+        count += batch;
+        if batch == 0 || count >= max_instructions {
             break;
         }
     }

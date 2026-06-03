@@ -234,7 +234,7 @@ fn run_command(
         }
         "go" | "run" => {
             if emu.panel.is_stopped() {
-                emu.panel.press_switch(rust_imsai_emulator::cards::PanelSwitch::RunStop);
+                emu.panel.press_switch(rust_imsai_emulator::PanelSwitch::RunStop);
             }
             emu.cpu.halted = false;
             CommandResult { close: true, ran: true, message: "Resuming execution. Press Ctrl+K to pause.".to_string() }
@@ -289,7 +289,7 @@ pub fn run_terminal(emu: &mut rust_imsai_emulator::Imsai8080) {
 
     // Start in RUN mode (program already loaded and PC set)
     if emu.panel.is_stopped() {
-        emu.panel.press_switch(rust_imsai_emulator::cards::PanelSwitch::RunStop);
+        emu.panel.press_switch(rust_imsai_emulator::PanelSwitch::RunStop);
         emu.process_panel();
     }
 
@@ -332,7 +332,7 @@ pub fn run_terminal(emu: &mut rust_imsai_emulator::Imsai8080) {
                                 got_key = true;
                             }
                             KeyEvent { code: KeyCode::F(5), .. } => {
-                                emu.panel.press_switch(rust_imsai_emulator::cards::PanelSwitch::RunStop);
+                                emu.panel.press_switch(rust_imsai_emulator::PanelSwitch::RunStop);
                                 emu.process_panel();
                                 last_display.clear();
                                 got_key = true;
@@ -353,7 +353,7 @@ pub fn run_terminal(emu: &mut rust_imsai_emulator::Imsai8080) {
                                 let ran_something = run_command_modal(emu, &mut stdout, &mut program_name);
                                 emu.process_panel();
                                 if ran_something && emu.panel.is_stopped() {
-                                    emu.panel.press_switch(rust_imsai_emulator::cards::PanelSwitch::RunStop);
+                                    emu.panel.press_switch(rust_imsai_emulator::PanelSwitch::RunStop);
                                     emu.process_panel();
                                 }
                                 last_display.clear();
