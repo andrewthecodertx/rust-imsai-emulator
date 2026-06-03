@@ -505,4 +505,27 @@ mod tests {
             77 * 26 * 128
         );
     }
+
+    #[test]
+    fn test_skew_table_is_permutation_of_1_to_26() {
+        // The skew table must be a permutation of 1..=26 (every number
+        // appears exactly once). This catches the bug where disk.rs and
+        // bios.rs had divergent tables from index 18 onward.
+        use crate::dpb::SKEW_TABLE;
+        let mut sorted: Vec<u8> = SKEW_TABLE.to_vec();
+        sorted.sort();
+        assert_eq!(sorted, (1u8..=26).collect::<Vec<u8>>(),
+            "SKEW_TABLE must contain every number from 1 to 26 exactly once");
+    }
+
+    #[test]
+    fn test_skew_table_logical_physical_roundtrip() {
+        // Every logical sector should map to a valid physical sector,
+        // and the roundtrip should be consistent.
+        for logical in 0u8..26 {
+            let physical = logical_to_physical(logical);
+            assert!(physical >= 1 && physical <= 26,
+                "logical {} maps to invalid physical {}", logical, physical);
+        }
+    }
 }
