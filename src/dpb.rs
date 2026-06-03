@@ -17,7 +17,7 @@
 //! | CKS              | 16    | Check vector size                 |
 //! | OFF              | 2     | Track offset (reserved tracks)    |
 //!
-//! The CP/M system (boot + CCP + BDOS + BIOS) occupies tracks 0-1
+//! The system tracks (boot + OS kernel) occupy tracks 0-1
 //! (2 reserved tracks). The directory and data area starts at track 2.
 //! The disk images are compatible with z80pack's cpmsim and imsaisim.
 
@@ -54,7 +54,7 @@ pub const TOTAL_TRACKS: u8 = 77;
 ///
 /// Maps logical sector numbers 0-25 to physical sector numbers 1-26.
 /// This is the canonical single source of truth for the Tarbell controller
-/// sector translation. Used by both `disk.rs` and any CP/M BIOS implementation.
+/// sector translation. Used by `disk.rs` for logical-to-physical mapping.
 pub const SKEW_TABLE: [u8; 26] = [
     1, 7, 13, 19, 25, 5, 11, 17, 23, 3, 9, 15, 21, 2, 8, 14, 20, 26, 6, 12, 18, 24, 4,
     10, 16, 22,

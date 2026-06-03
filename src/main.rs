@@ -956,11 +956,8 @@ fn run_interactive(emu: &mut rust_imsai_emulator::Imsai8080, max_instructions: u
     // Memory dump for debugging
     println!("\n=== MEMORY DUMP ===");
     dump_memory(&emu, 0x0000, 8, "Vectors");
-    dump_memory(&emu, 0x0100, 16, "TPA");
-    dump_memory(&emu, 0xF9F0, 48, "BDOS data/DPH area");
-    dump_memory(&emu, 0xFB20, 48, "Our DPH+DIRBUF");
-    dump_memory(&emu, 0xFBB0, 48, "CSV+ALV");
-    dump_memory(&emu, 0xFA00, 8, "BIOS jump table");
+    dump_memory(&emu, 0x0100, 16, "TPA start");
+    dump_memory(&emu, 0xFF00, 32, "High RAM");
 }
 
 fn dump_memory(emu: &rust_imsai_emulator::Imsai8080, start: u16, len: usize, label: &str) {
@@ -1010,8 +1007,7 @@ fn run_pc_trace(emu: &mut rust_imsai_emulator::Imsai8080, max: u64) {
     let mut early_trace: Vec<(u64, u16, [u8; 4], u8, u8, u8, u8, u8, u8, u8, u16, u8)> = Vec::new();
 
     // Region transition log: record when PC crosses a major boundary
-    // (e.g., from BIOS area to CCP, or from CCP to TPA)
-    let mut last_region: u8 = 0; // 0=zero-page, 1=TPA, 2=CCP, 3=BDOS, 4=BIOS, 5=other
+    let mut last_region: u8 = 0; // 0=zero-page, 1=user code, 2=high RAM
     let mut transitions: Vec<(u64, u16, u8, u8)> = Vec::new(); // (count, pc, from, to)
 
     let mut count: u64 = 0;
@@ -1039,14 +1035,14 @@ fn run_pc_trace(emu: &mut rust_imsai_emulator::Imsai8080, max: u64) {
         emu.step();
         count += 1;
 
-        // Detect CALL 5 (BDOS entry)
+        // Detect CALL 5
         if op == 0xCD {
             let lo = emu.bus.mem_read(pc + 1);
             let hi = emu.bus.mem_read(pc + 2);
             let target = lo as u16 | (hi as u16) << 8;
             if target == 0x0005 {
                 call5_count += 1;
-                last_call5_func = c; // BDOS function number is in C
+                last_call5_func = c; // function number is in C
             }
         }
 
@@ -1061,11 +1057,8 @@ fn run_pc_trace(emu: &mut rust_imsai_emulator::Imsai8080, max: u64) {
 
         // Track region transitions
         let region = if pc < 0x0100 { 0u8 } // zero page
-            else if pc < 0xE400 { 1 }       // TPA
-            else if pc < 0xEC00 { 2 }       // CCP
-            else if pc < 0xFA00 { 3 }      // BDOS
-            else if pc < 0xFE00 { 4 }      // BIOS
-            else { 5 };                    // other/unused
+            else if pc < 0xC000 { 1 }       // user code
+            else { 2 };                     // high RAM
         if region != last_region {
             transitions.push((count, pc, last_region, region));
             last_region = region;
@@ -1099,7 +1092,7 @@ fn run_pc_trace(emu: &mut rust_imsai_emulator::Imsai8080, max: u64) {
     }
 
     // Dump region transitions
-    let region_names = ["ZEROPAGE", "TPA     ", "CCP     ", "BDOS    ", "BIOS    ", "OTHER   "];
+    let region_names = ["ZEROPAGE", "USER    ", "HIGHRAM "];
     println!("\n=== REGION TRANSITIONS ===");
     for (cnt, pc, from, to) in &transitions {
         println!("  {:8}: PC=0x{:04X} {} -> {}",
@@ -1155,7 +1148,7 @@ fn run_pc_trace(emu: &mut rust_imsai_emulator::Imsai8080, max: u64) {
     }
 
     // Dump CALL 5 summary
-    println!("\n=== CALL 5 (BDOS) SUMMARY ===");
+    println!("\n=== CALL 5 SUMMARY ===");
     println!("  Total CALL 5 calls: {}", call5_count);
     if call5_count > 0 {
         println!("  Last function number in C: 0x{:02X}", last_call5_func);
@@ -1166,9 +1159,9 @@ fn run_pc_trace(emu: &mut rust_imsai_emulator::Imsai8080, max: u64) {
     println!("PC=0x{:04X} SP=0x{:04x} A=0x{:02X} BC=0x{:02X}{:02X} DE=0x{:02X}{:02X} HL=0x{:02X}{:02X}",
         emu.cpu.pc, emu.cpu.sp, emu.cpu.a,
         emu.cpu.b, emu.cpu.c, emu.cpu.d, emu.cpu.e, emu.cpu.h, emu.cpu.l);
-    println!("0x0000: {:02X} {:02X} {:02X}   (WBOOT vector)",
+    println!("0x0000: {:02X} {:02X} {:02X}   (reset vector)",
         emu.bus.mem_read(0), emu.bus.mem_read(1), emu.bus.mem_read(2));
-    println!("0x0005: {:02X} {:02X} {:02X}   (BDOS vector)",
+    println!("0x0005: {:02X} {:02X} {:02X}   (CALL 5 vector)",
         emu.bus.mem_read(5), emu.bus.mem_read(6), emu.bus.mem_read(7));
 }
 
@@ -1448,7 +1441,7 @@ fn run_scripted(emu: &mut rust_imsai_emulator::Imsai8080, cmd: Option<&str>, max
     // Quick memory dumps for debugging
     eprintln!("\n=== KEY MEMORY AREAS ===");
     dump_memory_eprint(&emu, 0x0000, 8, "Vectors");
-    dump_memory_eprint(&emu, 0x0005, 3, "BDOS JMP");
+    dump_memory_eprint(&emu, 0x0005, 3, "CALL 5 vector");
     dump_memory_eprint(&emu, 0x0100, 32, "TPA (0x0100)");
 }
 

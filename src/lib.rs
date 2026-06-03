@@ -17,7 +17,7 @@ pub mod cards;
 pub mod chips;
 /// S-100 system bus
 pub mod bus;
-/// CP/M disk image creation and management
+/// CP/M-compatible disk image creation and management
 pub mod disk;
 /// Disk parameter block definitions
 pub mod dpb;

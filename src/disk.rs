@@ -8,7 +8,7 @@
 //!
 //! | Tracks     | Contents                                    |
 //! |------------|---------------------------------------------|
-//! | 0-1        | System tracks (boot + CCP + BDOS + BIOS)  |
+//! | 0-1        | System tracks (reserved for OS bootstrap)    |
 //! | 2-76       | Data area (directory + file data)          |
 //!
 //! The directory occupies the first two allocation blocks (2KB) of the
@@ -207,7 +207,7 @@ impl DiskImage {
 
     /// Write system data onto the reserved tracks
     ///
-    /// This writes the CP/M system image (CCP + BDOS + BIOS) starting
+    /// This writes a system image onto the reserved tracks starting
     /// at track 0, sector 1. The data is written sequentially across
     /// the reserved tracks.
     pub fn write_system(&mut self, system_data: &[u8]) -> Result<(), String> {
@@ -284,8 +284,8 @@ impl DiskImage {
     /// Create a bootable CP/M disk by writing a system image onto the
     /// reserved tracks and formatting the directory.
     ///
-    /// `system_data` is the raw CP/M system (CCP + BDOS + BIOS) that
-    /// normally occupies the first 2 tracks.
+    /// `system_data` is the raw system image that normally occupies the
+    /// first 2 tracks (boot + OS kernel).
     pub fn create_bootable(system_data: &[u8]) -> Result<Self, String> {
         let mut disk = Self::new_formatted();
         disk.write_system(system_data)?;
@@ -316,19 +316,15 @@ fn physical_to_logical(physical: u8) -> u8 {
     physical.saturating_sub(1)
 }
 
-/// Utility to build a CP/M system image from components
+/// Utility to build a system image from components
 ///
-/// The CP/M system consists of:
-/// - CCP (Command Control Program) starting at 0x0000 (after boot)
-/// - BDOS (Basic Disk Operating System) following the CCP
-/// - BIOS (Basic Input/Output System) following the BDOS
-///
-/// In memory, the layout after boot is:
-/// - 0x0000: JMP WBOOT
+/// A system image is the raw bytes written to the reserved tracks.
+/// For CP/M 2.2, this would contain CCP + BDOS + BIOS.
+/// The memory layout after boot is:
+/// - 0x0000: JMP warm-boot
 /// - 0x0003: IOBYTE
-/// - 0x0005: JMP BDOS
-/// - 0x0100: CCP start (where user programs load)
-/// - CCP+BDOS+BIOS are loaded from the system tracks of the disk
+/// - 0x0005: JMP BDOS entry
+/// - 0x0100: TPA start (where user programs load)
 pub struct SystemBuilder {
     /// The system image data being built
     data: Vec<u8>,
