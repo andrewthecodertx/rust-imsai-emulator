@@ -831,4 +831,3 @@ mod tests {
         assert_eq!(panel.cycle_count(), 500);
     }
 }
-

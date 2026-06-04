@@ -12,6 +12,9 @@ pub struct Args {
     pub pc_trace: bool,
     pub batch: bool,
     pub script: bool,
+    /// Target CPU clock in MHz for the interactive TUI. `None` = run unthrottled
+    /// (host speed); `Some(2.0)` paces the emulation to a period-accurate 2 MHz.
+    pub speed_mhz: Option<f64>,
 }
 
 /// Parse command-line arguments into an `Args` struct.
@@ -55,6 +58,13 @@ pub fn parse_args() -> Args {
         .and_then(|i| args.get(i + 1))
         .map(|s| s.to_string());
 
+    let speed_mhz = args
+        .iter()
+        .position(|a| a == "--speed")
+        .and_then(|i| args.get(i + 1))
+        .and_then(|s| s.parse::<f64>().ok())
+        .filter(|mhz| *mhz > 0.0);
+
     let load_addr: u16 = if load_path.is_some() {
         let load_pos = args.iter().position(|a| a == "--load").unwrap_or(0);
         args.get(load_pos + 2)
@@ -79,6 +89,7 @@ pub fn parse_args() -> Args {
         pc_trace,
         batch,
         script,
+        speed_mhz,
     }
 }
 
@@ -105,6 +116,6 @@ fn print_usage(args: &Vec<String>) {
     eprintln!("  --pctrace, -p              PC ring-buffer trace (last 8K instructions)");
     eprintln!("  --script                   Scripted mode (captures console output)");
     eprintln!("  --cmd \"text\"             Pre-load keyboard input for scripted testing");
+    eprintln!("  --speed <mhz>              Throttle the TUI to a target clock (e.g. 2 for 2 MHz)");
     eprintln!("  --help, -h                 Show this help");
 }
-

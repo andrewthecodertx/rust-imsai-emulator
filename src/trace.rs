@@ -86,6 +86,7 @@ pub fn run_step_trace(emu: &mut Imsai8080, max: u64) {
 /// Diagnostic mode: run N instructions, log I/O and PC snapshots.
 pub fn run_diag(emu: &mut Imsai8080, max: u64) {
     println!("=== DIAGNOSTIC TRACE ({} instructions) ===", max);
+    emu.bus.serial().set_auto_render(false);
     let mut count: u64 = 0;
     let mut io_log: Vec<(u64, u8, u8, bool)> = Vec::new();
     let mut pc_snapshots: Vec<(u64, u16)> = Vec::new();
@@ -148,7 +149,8 @@ pub fn run_diag(emu: &mut Imsai8080, max: u64) {
         emu.bus.mem_read(7)
     );
 
-    let display = emu.bus.console().video().get_display_string();
+    emu.bus.serial().flush_to_video();
+    let display = emu.bus.serial().video().get_display_string();
     if !display.trim().is_empty() && display.trim().chars().any(|c| c != ' ') {
         println!("\nDisplay:\n{}", display);
     } else {
@@ -163,6 +165,7 @@ pub fn run_trace(emu: &mut Imsai8080, max: u64) {
         max, emu.cpu.pc
     );
 
+    emu.bus.serial().set_auto_render(false);
     if emu.panel.is_stopped() {
         emu.panel
             .press_switch(rust_imsai_emulator::PanelSwitch::RunStop);
@@ -181,7 +184,8 @@ pub fn run_trace(emu: &mut Imsai8080, max: u64) {
         "Stopped at PC=0x{:04X} after {} instructions",
         emu.cpu.pc, count
     );
-    let display = emu.bus.console().video().get_display_string();
+    emu.bus.serial().flush_to_video();
+    let display = emu.bus.serial().video().get_display_string();
     println!("\nDisplay:\n{}", display);
 }
 
@@ -421,6 +425,7 @@ pub fn run_verbose_trace(emu: &mut Imsai8080, max: u64) {
 /// Non-interactive batch: run N instructions, print display and memory dump.
 pub fn run_interactive(emu: &mut Imsai8080, max_instructions: u64) {
     println!("IMSAI 8080 ({} instructions)", max_instructions);
+    emu.bus.serial().set_auto_render(false);
 
     if emu.panel.is_stopped() {
         emu.panel
@@ -441,7 +446,8 @@ pub fn run_interactive(emu: &mut Imsai8080, max_instructions: u64) {
         "\nStopped at PC=0x{:04X} after {} instructions",
         emu.cpu.pc, count
     );
-    let display = emu.bus.console().video().get_display_string();
+    emu.bus.serial().flush_to_video();
+    let display = emu.bus.serial().video().get_display_string();
     if !display.trim().is_empty() && display.trim().chars().any(|c| c != ' ') {
         println!("\nDisplay:\n{}", display);
     } else {
@@ -456,11 +462,11 @@ pub fn run_interactive(emu: &mut Imsai8080, max_instructions: u64) {
 
 /// Scripted mode: run N instructions with pre-loaded input, capture output.
 pub fn run_scripted(emu: &mut Imsai8080, cmd: Option<&str>, max_instructions: u64) {
-    emu.bus.console().set_auto_render(false);
+    emu.bus.serial().set_auto_render(false);
 
     if let Some(cmd_text) = cmd {
         let input = cmd_text.replace("\\r", "\r").replace("\\n", "\n");
-        emu.bus.console().type_text(&input);
+        emu.bus.serial().type_text(&input);
     }
 
     let mut output = String::new();
@@ -525,4 +531,3 @@ pub fn run_scripted(emu: &mut Imsai8080, cmd: Option<&str>, max_instructions: u6
     dump_memory_eprint(&emu, 0x0005, 3, "CALL 5 vector");
     dump_memory_eprint(&emu, 0x0100, 32, "TPA (0x0100)");
 }
-

@@ -1,5 +1,3 @@
-use crate::io::Keyboard;
-
 const CMD_TX_ENABLE: u8 = 0x01;
 const CMD_DTR: u8 = 0x02;
 const CMD_RX_ENABLE: u8 = 0x04;
@@ -28,7 +26,8 @@ pub enum UartState {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BaudDivisor {
-    Sync = 1,
+    Sync = 0,
+    X1 = 1,
     X16 = 16,
     X64 = 64,
 }
@@ -69,10 +68,7 @@ pub struct Uart8251 {
     rts: bool,
     send_break: bool,
     status: u8,
-    tx_data: Option<u8>,
-    tx_draining: bool,
     rx_data: Option<u8>,
-    keyboard: Option<Keyboard>,
     output_buffer: Vec<u8>,
 }
 
@@ -96,17 +92,9 @@ impl Uart8251 {
             rts: false,
             send_break: false,
             status: STATUS_TX_EMPTY | STATUS_TX_READY,
-            tx_data: None,
-            tx_draining: false,
             rx_data: None,
-            keyboard: None,
             output_buffer: Vec::new(),
         }
-    }
-
-    pub fn with_keyboard(mut self, keyboard: Keyboard) -> Self {
-        self.keyboard = Some(keyboard);
-        self
     }
 
     pub fn reset(&mut self) {
@@ -117,8 +105,6 @@ impl Uart8251 {
         self.rts = false;
         self.send_break = false;
         self.status = STATUS_TX_EMPTY | STATUS_TX_READY;
-        self.tx_data = None;
-        self.tx_draining = false;
         self.rx_data = None;
         self.baud_divisor = BaudDivisor::X16;
         self.char_length = CharLength::Bits8;
@@ -126,29 +112,28 @@ impl Uart8251 {
         self.stop_bits = StopBits::One;
     }
 
-    pub fn read_data(&mut self) -> u8 {
-        if let Some(data) = self.rx_data.take() {
+    /// Read the RX data register. Returns `None` when empty (rather than a `0`
+    /// sentinel that's ambiguous with a received NUL) — mirrors `Keyboard`.
+    pub fn read_data(&mut self) -> Option<u8> {
+        self.rx_data.take().inspect(|_| {
             self.status &= !STATUS_RX_READY;
             self.status &= !STATUS_OVERRUN_ERR;
-            data
-        } else {
-            0
-        }
+        })
     }
 
     pub fn read_status(&self) -> u8 {
         self.status
     }
 
+    /// Transmit a byte. The transmitter is modeled as instantaneous (no shift-
+    /// register delay), so the byte lands in the output buffer immediately and
+    /// TxRDY/TxEMPTY stay asserted — there's no busy window to poll.
     pub fn write_data(&mut self, value: u8) {
         if !self.tx_enabled {
             return;
         }
-        self.tx_data = Some(value);
-        self.status &= !STATUS_TX_READY;
-        self.status &= !STATUS_TX_EMPTY;
-        self.tx_draining = false;
         self.output_buffer.push(value);
+        self.status |= STATUS_TX_READY | STATUS_TX_EMPTY;
     }
 
     /// Control port write: mode instruction, then command instruction, then commands.
@@ -166,7 +151,8 @@ impl Uart8251 {
     // Mode instruction: bits 1:0=baud, 3:2=charlen, 4=parity en, 5=parity type, 7:6=stop
     fn write_mode(&mut self, value: u8) {
         self.baud_divisor = match value & 0x03 {
-            0 | 1 => BaudDivisor::Sync,
+            0 => BaudDivisor::Sync,
+            1 => BaudDivisor::X1,
             2 => BaudDivisor::X16,
             3 => BaudDivisor::X64,
             _ => unreachable!(),
@@ -206,7 +192,6 @@ impl Uart8251 {
             self.tx_enabled = false;
             self.rx_enabled = false;
             self.status = STATUS_TX_EMPTY | STATUS_TX_READY;
-            self.tx_data = None;
             self.rx_data = None;
             return;
         }
@@ -218,46 +203,12 @@ impl Uart8251 {
         if value & 0x10 != 0 {
             self.status &= !(STATUS_PARITY_ERR | STATUS_OVERRUN_ERR | STATUS_FRAMING_ERR);
         }
-        if self.tx_enabled && self.tx_data.is_none() {
+        // Instantaneous transmitter: ready whenever TX is enabled.
+        self.status |= STATUS_TX_EMPTY;
+        if self.tx_enabled {
             self.status |= STATUS_TX_READY;
-        } else if !self.tx_enabled {
+        } else {
             self.status &= !STATUS_TX_READY;
-        }
-        if self.tx_data.is_none() {
-            self.status |= STATUS_TX_EMPTY;
-        }
-    }
-
-    pub fn poll_rx(&mut self) {
-        if !self.rx_enabled {
-            return;
-        }
-        if self.rx_data.is_none() {
-            if let Some(ref mut kbd) = self.keyboard {
-                if let Some(ch) = kbd.read_char() {
-                    self.rx_data = Some(ch);
-                    self.status |= STATUS_RX_READY;
-                }
-            }
-        } else if self.keyboard.as_ref().is_some_and(|k| k.is_char_ready()) {
-            self.status |= STATUS_OVERRUN_ERR;
-        }
-    }
-
-    pub fn drain_tx(&mut self) {
-        if self.tx_data.is_some() && !self.tx_draining {
-            self.tx_draining = true;
-        }
-    }
-
-    pub fn update_tx(&mut self) {
-        if self.tx_data.is_some() && self.tx_draining {
-            self.tx_data = None;
-            self.tx_draining = false;
-            self.status |= STATUS_TX_EMPTY;
-        }
-        if self.tx_enabled && self.tx_data.is_none() {
-            self.status |= STATUS_TX_READY;
         }
     }
 
@@ -290,7 +241,14 @@ impl Uart8251 {
     }
 
     /// Bypass keyboard and inject a byte directly into RX.
+    ///
+    /// If a previous byte is still unread, the 8251A flags an overrun: the new
+    /// byte overwrites the old one and `STATUS_OVERRUN_ERR` is set (cleared by
+    /// reading the data register or an error-reset command).
     pub fn inject_rx_byte(&mut self, value: u8) {
+        if self.rx_data.is_some() {
+            self.status |= STATUS_OVERRUN_ERR;
+        }
         self.rx_data = Some(value);
         self.status |= STATUS_RX_READY;
     }
@@ -331,7 +289,6 @@ mod tests {
         uart.write_control(0x37);
         assert_eq!(uart.state(), UartState::Ready);
         uart.write_data(b'A');
-        assert!(!uart.is_tx_ready());
         uart.write_control(0x40);
         assert_eq!(uart.state(), UartState::ExpectMode);
         assert!(uart.is_tx_ready());
@@ -377,10 +334,7 @@ mod tests {
         uart.write_control(0x05);
         assert!(uart.is_tx_ready());
         uart.write_data(b'H');
-        assert!(!uart.is_tx_ready());
-        assert!(!uart.read_status() & STATUS_TX_EMPTY != 0);
-        uart.drain_tx();
-        uart.update_tx();
+        // Instantaneous transmitter: stays ready, byte already buffered.
         assert!(uart.is_tx_ready());
         assert!(uart.read_status() & STATUS_TX_EMPTY != 0);
         let output = uart.take_output();
@@ -398,49 +352,18 @@ mod tests {
     }
 
     #[test]
-    fn test_rx_flow_with_keyboard() {
-        let mut kbd = Keyboard::new();
-        kbd.type_text("AB");
-        let mut uart = Uart8251::new().with_keyboard(kbd);
+    fn test_rx_flow() {
+        let mut uart = Uart8251::new();
         uart.write_control(0x4E);
         uart.write_control(0x05);
-        uart.poll_rx();
+        uart.inject_rx_byte(b'A');
         assert!(uart.is_rx_ready());
-        assert_eq!(uart.read_data(), b'A');
+        assert_eq!(uart.read_data(), Some(b'A'));
         assert!(!uart.is_rx_ready());
-        uart.poll_rx();
+        assert_eq!(uart.read_data(), None);
+        uart.inject_rx_byte(b'B');
         assert!(uart.is_rx_ready());
-        assert_eq!(uart.read_data(), b'B');
-    }
-
-    #[test]
-    fn test_rx_overrun_error() {
-        let mut kbd = Keyboard::new();
-        kbd.type_text("ABC");
-        let mut uart = Uart8251::new().with_keyboard(kbd);
-        uart.write_control(0x4E);
-        uart.write_control(0x05);
-        uart.poll_rx();
-        assert!(uart.is_rx_ready());
-        uart.poll_rx();
-        assert!(uart.read_status() & STATUS_OVERRUN_ERR != 0);
-        assert_eq!(uart.read_data(), b'A');
-        uart.write_control(0x14);
-        assert!(uart.read_status() & STATUS_OVERRUN_ERR == 0);
-    }
-
-    #[test]
-    fn test_rx_disabled_ignores_input() {
-        let mut kbd = Keyboard::new();
-        kbd.type_text("X");
-        let mut uart = Uart8251::new().with_keyboard(kbd);
-        uart.write_control(0x4E);
-        uart.write_control(0x01);
-        uart.poll_rx();
-        assert!(!uart.is_rx_ready());
-        uart.write_control(0x05);
-        uart.poll_rx();
-        assert!(uart.is_rx_ready());
+        assert_eq!(uart.read_data(), Some(b'B'));
     }
 
     #[test]
@@ -479,19 +402,45 @@ mod tests {
     }
 
     #[test]
-    fn test_multiple_writes_and_drains() {
+    fn test_multiple_writes_preserve_order() {
         let mut uart = Uart8251::new();
         uart.write_control(0x4E);
         uart.write_control(0x05);
         uart.write_data(b'H');
-        uart.drain_tx();
-        uart.update_tx();
         assert!(uart.is_tx_ready());
         uart.write_data(b'i');
-        uart.drain_tx();
-        uart.update_tx();
         let output = uart.take_output();
         assert_eq!(output, vec![b'H', b'i']);
+    }
+
+    #[test]
+    fn test_mode_instruction_async_x1_advances() {
+        // X1 (mode bits 01) is a valid async divisor and must advance the
+        // programming state machine to ExpectCommand, not stall in ExpectMode.
+        let mut uart = Uart8251::new();
+        uart.write_control(0x4D); // 8N1, X1 clock
+        assert_eq!(uart.state(), UartState::ExpectCommand);
+        assert_eq!(uart.baud_divisor(), BaudDivisor::X1);
+        uart.write_control(0x05); // TX+RX enable
+        assert_eq!(uart.state(), UartState::Ready);
+        assert!(uart.is_tx_enabled());
+    }
+
+    #[test]
+    fn test_inject_rx_byte_sets_overrun() {
+        // The production path (SerialCard) feeds RX via inject_rx_byte. A second
+        // byte arriving before the first is read must flag an overrun.
+        let mut uart = Uart8251::new();
+        uart.write_control(0x4E);
+        uart.write_control(0x05);
+        uart.inject_rx_byte(b'A');
+        assert!(uart.is_rx_ready());
+        assert_eq!(uart.read_status() & STATUS_OVERRUN_ERR, 0);
+        uart.inject_rx_byte(b'B'); // overwrites unread 'A'
+        assert_eq!(uart.read_status() & STATUS_OVERRUN_ERR, STATUS_OVERRUN_ERR);
+        // Reading the data register clears the overrun flag.
+        assert_eq!(uart.read_data(), Some(b'B'));
+        assert_eq!(uart.read_status() & STATUS_OVERRUN_ERR, 0);
     }
 
     #[test]
@@ -510,4 +459,3 @@ mod tests {
         assert!(uart.is_tx_enabled());
     }
 }
-

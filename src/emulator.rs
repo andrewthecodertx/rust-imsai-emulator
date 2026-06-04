@@ -8,6 +8,10 @@ pub struct Imsai8080 {
     pub cpu: Cpu8080,
     pub bus: ImsaiBus,
     pub panel: FrontPanel,
+    /// When set, `step()` skips front-panel LED updates and the IN/OUT logger.
+    /// Headless run paths (batch, trace, scripted) enable it for speed; the GUI
+    /// leaves it off because it draws the panel LEDs.
+    pub fast: bool,
 }
 
 impl Default for Imsai8080 {
@@ -23,6 +27,7 @@ impl Imsai8080 {
             cpu: Cpu8080::new(),
             bus: ImsaiBus::new(),
             panel: FrontPanel::new(),
+            fast: false,
         }
     }
 
@@ -32,21 +37,31 @@ impl Imsai8080 {
 
     /// Execute one CPU instruction. Call only when panel is in RUN mode.
     pub fn step(&mut self) -> u32 {
-        self.panel.clear_transient_leds();
-
         let pc_before = self.cpu.pc;
-        let op_byte = self.bus.mem_read(pc_before);
+        // Snapshot the opcode before executing so the IN/OUT logger sees it;
+        // skipped entirely in `fast` mode where nobody reads the panel.
+        let op_byte = if self.fast {
+            None
+        } else {
+            self.panel.clear_transient_leds();
+            Some(self.bus.mem_read(pc_before))
+        };
+
         let cycles = self.cpu.step(&mut self.bus);
 
-        let data_bus = self.bus.mem_read(self.cpu.pc);
-        self.panel.update_run_leds(&self.cpu, data_bus);
+        // Advance the serial line once: keyboard RX in (TX is instantaneous).
+        self.bus.serial().tick();
 
-        if op_byte == 0xD3 {
-            let port = self.bus.mem_read(pc_before.wrapping_add(1));
-            self.panel.log_io_write(self.cpu.cycles, port, self.cpu.a);
-        } else if op_byte == 0xDB {
-            let port = self.bus.mem_read(pc_before.wrapping_add(1));
-            self.panel.log_io_read(self.cpu.cycles, port, self.cpu.a);
+        if let Some(op_byte) = op_byte {
+            let data_bus = self.bus.mem_read(self.cpu.pc);
+            self.panel.update_run_leds(&self.cpu, data_bus);
+            if op_byte == 0xD3 {
+                let port = self.bus.mem_read(pc_before.wrapping_add(1));
+                self.panel.log_io_write(self.cpu.cycles, port, self.cpu.a);
+            } else if op_byte == 0xDB {
+                let port = self.bus.mem_read(pc_before.wrapping_add(1));
+                self.panel.log_io_read(self.cpu.cycles, port, self.cpu.a);
+            }
         }
 
         cycles
@@ -169,4 +184,3 @@ mod tests {
         val
     }
 }
-

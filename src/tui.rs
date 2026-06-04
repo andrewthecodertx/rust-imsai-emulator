@@ -11,11 +11,34 @@ use crossterm::{
 use rust_imsai_emulator::save_memory_to_file;
 use rust_imsai_emulator::{execute_panel_program, find_program_start, load_program_file};
 
+/// Instructions executed per UI iteration before polling input / repainting.
+const BATCH_SIZE: u64 = 5000;
+/// Instruction cap when there's no TTY and we fall back to batch mode.
+const FALLBACK_INSTRUCTIONS: u64 = 50_000_000;
+/// Consecutive CONIN-poll iterations before we sleep to avoid busy-spinning.
+const IDLE_SPIN_THRESHOLD: u64 = 100;
+/// How long to sleep once a CONIN busy-wait loop is detected.
+const IDLE_SLEEP: std::time::Duration = std::time::Duration::from_millis(1);
+
 /// Which content to show on the bottom row of the TUI.
 #[derive(Copy, Clone)]
 enum BottomMode {
     Status,
     Prompt,
+}
+
+/// Restores the terminal (leaves the alternate screen, disables raw mode) when
+/// dropped — on a normal return *or* during a panic unwind. Without this, any
+/// reachable panic (e.g. a guest running to 0xFFFF) leaves the user's shell in
+/// raw mode with no echo. Restoration is idempotent, so it's safe alongside the
+/// explicit teardown at the normal exit points.
+struct TerminalGuard;
+
+impl Drop for TerminalGuard {
+    fn drop(&mut self) {
+        let _ = io::stdout().execute(LeaveAlternateScreen);
+        let _ = disable_raw_mode();
+    }
 }
 
 /// Result of executing a TUI command.
@@ -36,8 +59,8 @@ fn save_memory(emu: &mut rust_imsai_emulator::Imsai8080) {
 
 /// Reset console UART for a new program.
 fn reset_console_for_new_program(emu: &mut rust_imsai_emulator::Imsai8080) {
-    emu.bus.console().video_mut().clear();
-    emu.bus.console().set_auto_render(false);
+    emu.bus.serial().video_mut().clear();
+    emu.bus.serial().set_auto_render(false);
 }
 
 /// Calculate the row where the status/prompt bar anchors.
@@ -310,15 +333,28 @@ fn run_command(
 }
 
 /// Interactive terminal mode: TUI with 80x24 CRT display and status bar.
-pub fn run_terminal(emu: &mut rust_imsai_emulator::Imsai8080) {
+/// `speed_mhz` throttles the emulated CPU to a target clock; `None` runs at host speed.
+pub fn run_terminal(emu: &mut rust_imsai_emulator::Imsai8080, speed_mhz: Option<f64>) {
+    let throttle_hz = speed_mhz.map(|mhz| mhz * 1_000_000.0);
     let mut program_name = String::new();
     if enable_raw_mode().is_err() {
         eprintln!("No TTY available, falling back to batch mode (use --batch to force)");
-        crate::trace::run_interactive(emu, 50_000_000);
+        crate::trace::run_interactive(emu, FALLBACK_INSTRUCTIONS);
         return;
     }
 
-    emu.bus.console().set_auto_render(false);
+    // Raw mode is now on; ensure it's restored on every exit path, including
+    // panics. The panic hook restores first so the panic message is printed to
+    // the normal screen rather than swallowed by the alternate screen.
+    let _guard = TerminalGuard;
+    let prev_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let _ = io::stdout().execute(LeaveAlternateScreen);
+        let _ = disable_raw_mode();
+        prev_hook(info);
+    }));
+
+    emu.bus.serial().set_auto_render(false);
 
     let mut stdout = io::stdout();
     stdout
@@ -337,12 +373,14 @@ pub fn run_terminal(emu: &mut rust_imsai_emulator::Imsai8080) {
         }
     }
 
-    let batch_size: u64 = 5000;
     let poll_timeout = std::time::Duration::from_millis(0);
     let mut instruction_count: u64 = 0;
     let mut idle_count: u64 = 0;
     let mut last_display: String = String::new();
     let start_time = Instant::now();
+    // Baselines for --speed throttling (paces emulated cycles to wall-clock).
+    let throttle_start = Instant::now();
+    let throttle_start_cycles = emu.cpu.cycles;
 
     if emu.panel.is_stopped() {
         emu.panel
@@ -352,12 +390,22 @@ pub fn run_terminal(emu: &mut rust_imsai_emulator::Imsai8080) {
 
     loop {
         if emu.panel.is_running() && !emu.cpu.halted {
-            let count = emu.run_batch(batch_size);
+            let count = emu.run_batch(BATCH_SIZE);
             instruction_count += count;
-            emu.bus.serial().poll_rx();
+            emu.bus.serial().flush_to_video();
+
+            // Throttle to the target clock by sleeping off any time we ran ahead.
+            if let Some(hz) = throttle_hz {
+                let elapsed_cycles = emu.cpu.cycles.saturating_sub(throttle_start_cycles);
+                let target = std::time::Duration::from_secs_f64(elapsed_cycles as f64 / hz);
+                let actual = throttle_start.elapsed();
+                if target > actual {
+                    std::thread::sleep(target - actual);
+                }
+            }
         }
 
-        let display = emu.bus.console().video().get_display_string();
+        let display = emu.bus.serial().video().get_display_string();
         if display != last_display || emu.cpu.halted {
             last_display = display.clone();
             let term_size = crossterm::terminal::size().unwrap_or((80, 24));
@@ -393,7 +441,7 @@ pub fn run_terminal(emu: &mut rust_imsai_emulator::Imsai8080) {
                         KeyEvent {
                             code: KeyCode::Esc, ..
                         } => {
-                            emu.bus.console().type_text("\x1B");
+                            emu.bus.serial().type_text("\x1B");
                             got_key = true;
                         }
                         KeyEvent {
@@ -511,8 +559,8 @@ pub fn run_terminal(emu: &mut rust_imsai_emulator::Imsai8080) {
             // IN 0x01 = 0xDB 0x01, the classic CONIN status poll
             if !rx_ready && op == 0xDB && emu.bus.mem_read(pc.wrapping_add(1)) == 0x01 {
                 idle_count += 1;
-                if idle_count > 100 {
-                    std::thread::sleep(std::time::Duration::from_millis(1));
+                if idle_count > IDLE_SPIN_THRESHOLD {
+                    std::thread::sleep(IDLE_SLEEP);
                 }
             } else {
                 idle_count = 0;
@@ -520,4 +568,3 @@ pub fn run_terminal(emu: &mut rust_imsai_emulator::Imsai8080) {
         }
     }
 }
-

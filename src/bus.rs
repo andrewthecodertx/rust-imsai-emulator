@@ -18,6 +18,12 @@ impl ImsaiBus {
     }
 
     pub fn load(&mut self, start: u16, data: &[u8]) {
+        debug_assert!(
+            start as usize + data.len() <= 0x10000,
+            "load of {} bytes at 0x{:04X} wraps past 0xFFFF and overwrites low memory",
+            data.len(),
+            start
+        );
         for (i, &byte) in data.iter().enumerate() {
             self.memory.ram[start.wrapping_add(i as u16) as usize] = byte;
         }
@@ -32,10 +38,6 @@ impl ImsaiBus {
     }
 
     pub fn serial(&mut self) -> &mut SerialCard {
-        &mut self.serial
-    }
-
-    pub fn console(&mut self) -> &mut SerialCard {
         &mut self.serial
     }
 
@@ -94,4 +96,3 @@ impl Bus for ImsaiBus {
         }
     }
 }
-

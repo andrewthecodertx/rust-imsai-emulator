@@ -21,10 +21,12 @@ Emulates the IMSAI 8080 hardware: Intel 8080 CPU, 64KB RAM, Tarbell FD1771 flopp
 
 ## Front Panel GUI
 
-The `imsai-gui` binary provides a visual raylib front panel:
+The `imsai-gui` binary provides a visual raylib front panel. It needs the `gui`
+feature (raylib is an optional dependency, so the terminal CLI builds without
+the raylib C library):
 
 ```bash
-cargo run --bin imsai-gui
+cargo run --features gui --bin imsai-gui
 ```
 
 Defaults to empty memory (all addresses = 0xFF), matching a powered-on IMSAI with no software. Use the program loader (F2) or command-line flags to load software before pressing F5 to run.
@@ -72,10 +74,10 @@ The `load` action is a shortcut that writes bytes via `load_program()` instead o
 
 ```bash
 # Run the UART test program
-cargo run --bin imsai-gui -- --program programs/uart-test.json
+cargo run --features gui --bin imsai-gui -- --program programs/uart-test.json
 
 # Run the Hello World program
-cargo run --bin imsai-gui -- --program programs/hello-world.json
+cargo run --features gui --bin imsai-gui -- --program programs/hello-world.json
 ```
 
 ### Front Panel Controls
@@ -122,6 +124,7 @@ Options:
   --pctrace, -p              PC ring-buffer trace (last 8K instructions)
   --script                   Scripted mode (captures console output)
   --cmd "text"               Pre-load keyboard input for scripted testing
+  --speed <mhz>              Throttle the TUI to a target clock (default: host speed)
 ```
 
 ## Terminal Controls

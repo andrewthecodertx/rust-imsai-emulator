@@ -180,7 +180,7 @@ checksum = "0cc23270f6e1808e30a928bdc84dea0b9b4136a8bc82338574f23baf47bbd280"
 [[package]]
 name = "intel8080"
 version = "0.1.0"
-source = "git+https://github.com/andrewthecodertx/rust-intel8080-emulator#aaea08fdeba555df4387e6944bdfa48946cf490f"
+source = "git+https://github.com/andrewthecodertx/rust-intel8080-emulator?rev=aaea08fdeba555df4387e6944bdfa48946cf490f#aaea08fdeba555df4387e6944bdfa48946cf490f"
 
 [[package]]
 name = "itertools"

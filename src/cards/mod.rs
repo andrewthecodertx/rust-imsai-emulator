@@ -13,4 +13,3 @@ pub use memory::save_memory_to_file;
 pub use memory::MemoryCard;
 pub use serial::SerialCard;
 pub use tarbell::TarbellCard;
-

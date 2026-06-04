@@ -59,7 +59,7 @@ fn main() {
     }
 
     if let Some(ref path) = args.disk_path {
-            match emu.bus.insert_disk(0, path) {
+        match emu.bus.insert_disk(0, path) {
             Ok(()) => eprintln!("Disk mounted in drive A: {}", path),
             Err(e) => {
                 eprintln!("Error mounting disk '{}': {}", path, e);
@@ -74,8 +74,19 @@ fn main() {
 
     if let Some(ref cmd) = args.cmd_text {
         let input = cmd.replace("\\r", "\r").replace("\\n", "\n");
-        emu.bus.console().type_text(&input);
+        emu.bus.serial().type_text(&input);
     }
+
+    // Headless run paths (trace/diag/batch/scripted) don't draw the front-panel
+    // LEDs, so skip that per-instruction bookkeeping for speed. The interactive
+    // TUI (the final `else`) leaves it off.
+    emu.fast = args.step_trace
+        || args.diag
+        || args.pc_trace
+        || args.verbose_trace
+        || args.trace
+        || args.script
+        || args.batch;
 
     if args.step_trace {
         trace::run_step_trace(&mut emu, 500);
@@ -92,7 +103,7 @@ fn main() {
     } else if args.batch {
         trace::run_interactive(&mut emu, 50_000_000);
     } else {
-        tui::run_terminal(&mut emu);
+        tui::run_terminal(&mut emu, args.speed_mhz);
     }
 
     let mem_path = std::path::Path::new("imsai_memory.json");

@@ -2,6 +2,10 @@ use crate::chips::Uart8251;
 use crate::io::Keyboard;
 use crate::io::VideoDisplay;
 
+/// Console dimensions (standard 80x24 CRT terminal).
+const CONSOLE_COLS: usize = 80;
+const CONSOLE_ROWS: usize = 24;
+
 /// IMSAI SIO-2 dual-channel serial card. Channel A = console, Channel B = auxiliary.
 pub struct SerialCard {
     channel_a: Uart8251,
@@ -15,7 +19,7 @@ impl SerialCard {
         Self {
             channel_a: Uart8251::new(),
             channel_b: Uart8251::new(),
-            video: VideoDisplay::new(80, 24),
+            video: VideoDisplay::new(CONSOLE_COLS, CONSOLE_ROWS),
             keyboard: Keyboard::new(),
         }
     }
@@ -52,55 +56,29 @@ impl SerialCard {
         &mut self.channel_b
     }
 
-    /// Poll keyboard into Channel A RX without draining TX output.
-    /// Use for custom rendering (raylib panel) where you manage TX yourself.
-    pub fn poll_keyboard(&mut self) {
-        if self.channel_a.is_rx_enabled() {
+    /// Advance the serial line by one tick: pull one waiting keyboard byte into
+    /// Channel A's RX register (only when RX is enabled and the previous byte
+    /// has been read). TX is instantaneous, so there's nothing to drain here.
+    /// Driven once per instruction by `Imsai8080::step`, so every run path
+    /// (TUI, GUI, scripted, trace) gets keyboard input without special-casing.
+    pub fn tick(&mut self) {
+        if self.channel_a.is_rx_enabled() && !self.channel_a.is_rx_ready() {
             if let Some(ch) = self.keyboard.read_char() {
                 self.channel_a.inject_rx_byte(ch);
             }
         }
     }
 
-    /// Service Channel A UART: inject keyboard input, drain TX shift register.
-    /// Called from I/O read so TxRDY polling works during execution.
-    /// Does NOT consume the output buffer (host calls `take_output()`).
-    pub fn service_uart(&mut self) {
-        if self.channel_a.is_rx_enabled() {
-            if let Some(ch) = self.keyboard.read_char() {
-                self.channel_a.inject_rx_byte(ch);
-            }
-        }
-        self.channel_a.drain_tx();
-        self.channel_a.update_tx();
-    }
-
-    /// Poll keyboard and drain TX output to the video display.
-    /// Use for terminal-mode emulator. For raylib panel, use `poll_keyboard()`.
-    pub fn poll_rx(&mut self) {
-        if self.channel_a.is_rx_enabled() {
-            if let Some(ch) = self.keyboard.read_char() {
-                self.channel_a.inject_rx_byte(ch);
-            }
-        }
+    /// Drain Channel A's transmitted bytes into the internal video buffer.
+    /// Used by the terminal frontend, which reads back `video().get_display_string()`.
+    /// (The raylib panel takes the bytes via `take_output()` and renders them itself.)
+    pub fn flush_to_video(&mut self) {
         let output = self.channel_a.take_output();
         for &byte in &output {
             self.video.write_char(byte);
-            if self.video.auto_render {
-                self.video.render();
-            }
         }
-        self.channel_a.drain_tx();
-        self.channel_a.update_tx();
-    }
-
-    pub fn drain_output(&mut self) {
-        let output = self.channel_a.take_output();
-        for &byte in &output {
-            self.video.write_char(byte);
-            if self.video.auto_render {
-                self.video.render();
-            }
+        if self.video.auto_render {
+            self.video.render();
         }
     }
 }
@@ -112,16 +90,16 @@ impl Default for SerialCard {
 }
 
 impl SerialCard {
+    /// Pure register read — no side effects. The serial line is advanced by
+    /// `tick()` from the run loop, not by reads. An empty RX register reads as
+    /// 0xFF (floating bus); guests gate data reads on RxRDY.
     pub fn io_read(&mut self, port: u8) -> u8 {
-        if matches!(port, 0x00 | 0x01 | 0x79) {
-            self.service_uart();
-        }
         match port {
-            0x00 => self.channel_a.read_data(),
+            0x00 => self.channel_a.read_data().unwrap_or(0xFF),
             0x01 => self.channel_a.read_status(),
             0x79 => self.channel_a.read_status(),
-            0x7B => self.channel_a.read_data(),
-            0x02 => self.channel_b.read_data(),
+            0x7B => self.channel_a.read_data().unwrap_or(0xFF),
+            0x02 => self.channel_b.read_data().unwrap_or(0xFF),
             0x03 => self.channel_b.read_status(),
             _ => 0xFF,
         }
@@ -192,8 +170,6 @@ mod tests {
         card.io_write(0x01, 0x4E);
         card.io_write(0x01, 0x05);
         card.io_write(0x00, b'H');
-        card.channel_a_mut().drain_tx();
-        card.channel_a_mut().update_tx();
         let output = card.channel_a_mut().take_output();
         assert_eq!(output, vec![b'H']);
     }
@@ -204,9 +180,24 @@ mod tests {
         card.io_write(0x01, 0x4E);
         card.io_write(0x01, 0x05);
         card.type_text("A");
-        card.poll_rx();
+        card.tick();
         let ch = card.io_read(0x00);
         assert_eq!(ch, b'A');
+    }
+
+    #[test]
+    fn test_serial_card_rx_disabled_ignores_input() {
+        let mut card = SerialCard::new();
+        // Channel A programmed but RX not enabled (command 0x01 = TX only).
+        card.io_write(0x01, 0x4E);
+        card.io_write(0x01, 0x01);
+        card.type_text("X");
+        card.tick();
+        assert_eq!(card.io_read(0x01) & 0x02, 0x00); // RxRDY stays clear
+                                                     // Enabling RX (0x05 = TX+RX) lets the byte through.
+        card.io_write(0x01, 0x05);
+        card.tick();
+        assert_eq!(card.io_read(0x01) & 0x02, 0x02);
     }
 
     #[test]
@@ -225,8 +216,6 @@ mod tests {
         card.io_write(0x01, 0x4E);
         card.io_write(0x01, 0x05);
         card.io_write(0x7B, b'X');
-        card.channel_a_mut().drain_tx();
-        card.channel_a_mut().update_tx();
         let output = card.channel_a_mut().take_output();
         assert_eq!(output, vec![b'X']);
     }
@@ -251,4 +240,3 @@ mod tests {
         assert_eq!(card.io_read(0x48), 0xFF);
     }
 }
-

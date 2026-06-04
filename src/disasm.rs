@@ -220,4 +220,3 @@ mod tests {
         assert_eq!(port_name(0x10), "");
     }
 }
-

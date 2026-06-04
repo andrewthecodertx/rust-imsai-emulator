@@ -830,12 +830,9 @@ fn main() {
         if emu.panel.is_running() && !emu.cpu.halted {
             cycles += emu.run_batch(10000);
         }
-        // Always service the UART so any bytes still in the transmitter shift
-        // out -- including the final ones emitted just before a HLT.
+        // Keyboard input and TX are handled per-instruction by `step()` during
+        // run_batch; just collect whatever the console transmitted this frame.
         if emu.panel.is_running() {
-            emu.bus.serial().channel_a_mut().drain_tx();
-            emu.bus.serial().channel_a_mut().update_tx();
-            emu.bus.serial().poll_keyboard();
             let output = emu.bus.serial().channel_a_mut().take_output();
             for &b in &output {
                 match b {

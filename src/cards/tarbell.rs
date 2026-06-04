@@ -7,7 +7,9 @@ pub struct TarbellCard {
 }
 
 impl TarbellCard {
-    pub fn new() -> Self { Self { fdc: Fd1771::new() } }
+    pub fn new() -> Self {
+        Self { fdc: Fd1771::new() }
+    }
 
     pub fn insert_disk(&mut self, drive: usize, path: &str) -> Result<(), String> {
         let disk = DiskImage::load(std::path::Path::new(path))?;
@@ -18,13 +20,27 @@ impl TarbellCard {
         self.fdc.insert_blank_disk(drive)
     }
 
-    pub fn get_disk(&self, drive: usize) -> Option<&DiskImage> { self.fdc.get_disk(drive) }
-    pub fn get_disk_mut(&mut self, drive: usize) -> Option<&mut DiskImage> { self.fdc.get_disk_mut(drive) }
-    pub fn fdc_mut(&mut self) -> &mut Fd1771 { &mut self.fdc }
-    pub fn fdc(&self) -> &Fd1771 { &self.fdc }
-    pub fn current_track(&self) -> u8 { self.fdc.track_register() }
-    pub fn current_sector(&self) -> u8 { self.fdc.sector_register() }
-    pub fn has_disk(&self, drive: usize) -> bool { self.fdc.has_disk(drive) }
+    pub fn get_disk(&self, drive: usize) -> Option<&DiskImage> {
+        self.fdc.get_disk(drive)
+    }
+    pub fn get_disk_mut(&mut self, drive: usize) -> Option<&mut DiskImage> {
+        self.fdc.get_disk_mut(drive)
+    }
+    pub fn fdc_mut(&mut self) -> &mut Fd1771 {
+        &mut self.fdc
+    }
+    pub fn fdc(&self) -> &Fd1771 {
+        &self.fdc
+    }
+    pub fn current_track(&self) -> u8 {
+        self.fdc.track_register()
+    }
+    pub fn current_sector(&self) -> u8 {
+        self.fdc.sector_register()
+    }
+    pub fn has_disk(&self, drive: usize) -> bool {
+        self.fdc.has_disk(drive)
+    }
 
     /// Map Tarbell board port to FD1771 register offset (0-3). 0x48-0x4B direct, 0xF8-0xFB alias.
     fn port_to_fd1771_offset(port: u8) -> Option<u8> {
@@ -37,7 +53,9 @@ impl TarbellCard {
 }
 
 impl Default for TarbellCard {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl TarbellCard {
@@ -47,7 +65,15 @@ impl TarbellCard {
                 let offset = Self::port_to_fd1771_offset(port).unwrap();
                 self.fdc.read_register(offset)
             }
-            0xFC => self.fdc.is_drq_active() as u8 | 0x00,
+            // DRQ/wait status: bit 7 set = data byte ready, clear = transfer
+            // complete. Boot ROMs test the sign bit (RAL/JM) after IN 0xFC.
+            0xFC => {
+                if self.fdc.is_drq_active() {
+                    0x80
+                } else {
+                    0x00
+                }
+            }
             0xFD => 0x00,
             0xFF => 0x03,
             _ => 0xFF,
@@ -68,9 +94,13 @@ impl TarbellCard {
         matches!(port, 0x48..=0x4B | 0xF8..=0xFD | 0xFF)
     }
 
-    pub fn owns_address(&self, _addr: u16) -> bool { false }
+    pub fn owns_address(&self, _addr: u16) -> bool {
+        false
+    }
 
-    pub fn name(&self) -> &'static str { "Tarbell 1011" }
+    pub fn name(&self) -> &'static str {
+        "Tarbell 1011"
+    }
 }
 
 #[cfg(test)]
@@ -155,7 +185,10 @@ mod tests {
         let mut card = TarbellCard::new();
         card.insert_blank_disk(0).unwrap();
         let pattern = [0xAA; 128];
-        card.get_disk_mut(0).unwrap().write_sector(0, 1, &pattern).unwrap();
+        card.get_disk_mut(0)
+            .unwrap()
+            .write_sector(0, 1, &pattern)
+            .unwrap();
         card.io_write(0x49, 0);
         card.io_write(0x4A, 1);
         card.io_write(0x48, 0x88);
@@ -164,6 +197,20 @@ mod tests {
             read_data[i] = card.io_read(0x4B);
         }
         assert_eq!(read_data, pattern);
+    }
+
+    #[test]
+    fn test_tarbell_card_drq_status_in_bit7() {
+        let mut card = TarbellCard::new();
+        card.insert_blank_disk(0).unwrap();
+        // No transfer in progress: DRQ clear.
+        assert_eq!(card.io_read(0xFC), 0x00);
+        // Issue a READ SECTOR command; a byte becomes available (DRQ active).
+        card.io_write(0x49, 0); // track
+        card.io_write(0x4A, 1); // sector
+        card.io_write(0x48, 0x88); // read command
+                                   // DRQ must be reported in bit 7 so `RAL`/`JM` boot-ROM polling sees it.
+        assert_eq!(card.io_read(0xFC) & 0x80, 0x80);
     }
 
     #[test]

@@ -28,6 +28,8 @@ impl VideoDisplay {
     }
 
     pub fn write_char(&mut self, ch: u8) {
+        // Bytes map 1:1 to Unicode scalar values, so 0x80-0xFF become Latin-1
+        // code points. Fine for this ASCII console; high bytes are never sent.
         let ch = ch as char;
 
         match ch {
@@ -68,14 +70,9 @@ impl VideoDisplay {
     }
 
     fn scroll_up(&mut self) {
-        for y in 0..self.height - 1 {
-            for x in 0..self.width {
-                self.buffer[y][x] = self.buffer[y + 1][x];
-            }
-        }
-
-        for x in 0..self.width {
-            self.buffer[self.height - 1][x] = ' ';
+        self.buffer.rotate_left(1);
+        for cell in &mut self.buffer[self.height - 1] {
+            *cell = ' ';
         }
     }
 
@@ -89,21 +86,19 @@ impl VideoDisplay {
         self.cursor_y = 0;
     }
 
+    /// Paint the whole buffer to stdout in a single write (cursor homed first).
+    /// Callers decide *when* to render; this always draws when called.
     pub fn render(&self) {
-        if !self.auto_render {
-            return;
+        let mut out = String::with_capacity((self.width + 1) * self.height + 4);
+        out.push_str("\x1B[H");
+        for row in &self.buffer {
+            out.extend(row.iter());
+            out.push('\n');
         }
 
-        print!("\x1B[H");
-
-        for y in 0..self.height {
-            for x in 0..self.width {
-                print!("{}", self.buffer[y][x]);
-            }
-            println!();
-        }
-
-        let _ = io::stdout().flush();
+        let mut stdout = io::stdout().lock();
+        let _ = stdout.write_all(out.as_bytes());
+        let _ = stdout.flush();
     }
 
     pub fn get_display_string(&self) -> String {

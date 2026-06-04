@@ -1,4 +1,4 @@
-use crate::dpb::{SPT, SECTOR_SIZE, SKEW_TABLE, TOTAL_TRACKS};
+use crate::dpb::{SECTOR_SIZE, SKEW_TABLE, SPT, TOTAL_TRACKS};
 
 pub const DISK_SIZE: usize = TOTAL_TRACKS as usize * SPT as usize * SECTOR_SIZE;
 
@@ -21,25 +21,44 @@ impl DiskImage {
     pub fn load(path: &std::path::Path) -> Result<Self, String> {
         let data = std::fs::read(path).map_err(|e| format!("Failed to read disk image: {}", e))?;
         if data.len() != DISK_SIZE {
-            return Err(format!("Disk image size mismatch: expected {} bytes, got {}", DISK_SIZE, data.len()));
+            return Err(format!(
+                "Disk image size mismatch: expected {} bytes, got {}",
+                DISK_SIZE,
+                data.len()
+            ));
         }
-        Ok(Self { data, write_protected: false, dirty: false })
+        Ok(Self {
+            data,
+            write_protected: false,
+            dirty: false,
+        })
     }
 
     pub fn save(&mut self, path: &std::path::Path) -> Result<(), String> {
-        std::fs::write(path, &self.data).map_err(|e| format!("Failed to write disk image: {}", e))?;
+        std::fs::write(path, &self.data)
+            .map_err(|e| format!("Failed to write disk image: {}", e))?;
         self.dirty = false;
         Ok(())
     }
 
-    pub fn is_dirty(&self) -> bool { self.dirty }
-    pub fn is_write_protected(&self) -> bool { self.write_protected }
-    pub fn set_write_protected(&mut self, wp: bool) { self.write_protected = wp; }
+    pub fn is_dirty(&self) -> bool {
+        self.dirty
+    }
+    pub fn is_write_protected(&self) -> bool {
+        self.write_protected
+    }
+    pub fn set_write_protected(&mut self, wp: bool) {
+        self.write_protected = wp;
+    }
 
     /// Read a physical sector. Sector 0 is treated as sector 1.
     pub fn read_sector(&self, track: u8, sector: u8) -> Result<[u8; SECTOR_SIZE], String> {
         if track >= TOTAL_TRACKS {
-            return Err(format!("Track {} out of range (0-{})", track, TOTAL_TRACKS - 1));
+            return Err(format!(
+                "Track {} out of range (0-{})",
+                track,
+                TOTAL_TRACKS - 1
+            ));
         }
         let physical_sector = if sector == 0 { 1 } else { sector };
         if physical_sector > SPT as u8 {
@@ -51,12 +70,21 @@ impl DiskImage {
         Ok(buf)
     }
 
-    pub fn write_sector(&mut self, track: u8, sector: u8, data: &[u8; SECTOR_SIZE]) -> Result<(), String> {
+    pub fn write_sector(
+        &mut self,
+        track: u8,
+        sector: u8,
+        data: &[u8; SECTOR_SIZE],
+    ) -> Result<(), String> {
         if self.write_protected {
             return Err("Disk is write-protected".into());
         }
         if track >= TOTAL_TRACKS {
-            return Err(format!("Track {} out of range (0-{})", track, TOTAL_TRACKS - 1));
+            return Err(format!(
+                "Track {} out of range (0-{})",
+                track,
+                TOTAL_TRACKS - 1
+            ));
         }
         let physical_sector = if sector == 0 { 1 } else { sector };
         if physical_sector > SPT as u8 {
@@ -68,8 +96,13 @@ impl DiskImage {
         Ok(())
     }
 
-    pub fn data(&self) -> &[u8] { &self.data }
-    pub fn data_mut(&mut self) -> &mut [u8] { self.dirty = true; &mut self.data }
+    pub fn data(&self) -> &[u8] {
+        &self.data
+    }
+    pub fn data_mut(&mut self) -> &mut [u8] {
+        self.dirty = true;
+        &mut self.data
+    }
 }
 
 /// Convert logical sector (0-25) to physical sector (1-26) using 6:1 interleave.

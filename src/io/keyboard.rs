@@ -80,4 +80,3 @@ mod tests {
         assert_eq!(keyboard.read_char(), None);
     }
 }
-

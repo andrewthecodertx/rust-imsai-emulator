@@ -13,16 +13,28 @@ struct MemorySegment {
 /// Uninitialized bus reads return 0xFF (floating bus state).
 /// The RAM array is initialized to 0xFF on creation.
 pub struct MemoryCard {
-    pub ram: [u8; 65536],
+    pub ram: Box<[u8; 65536]>,
 }
 
 impl MemoryCard {
     pub fn new() -> Self {
-        Self { ram: [0xFF; 65536] }
+        Self {
+            ram: Self::boxed_ram(0xFF),
+        }
     }
 
     pub fn new_zeroed() -> Self {
-        Self { ram: [0x00; 65536] }
+        Self {
+            ram: Self::boxed_ram(0x00),
+        }
+    }
+
+    /// Allocate the 64K RAM directly on the heap (no 64K stack temporary).
+    fn boxed_ram(fill: u8) -> Box<[u8; 65536]> {
+        vec![fill; 65536]
+            .into_boxed_slice()
+            .try_into()
+            .expect("65536-byte RAM")
     }
 
     pub fn read(&self, addr: u16) -> u8 {
@@ -64,8 +76,7 @@ pub fn save_memory_to_file(ram: &[u8; 65536], path: &Path) -> std::io::Result<()
             i += 1;
         }
     }
-    let json = serde_json::to_string_pretty(&segments)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+    let json = serde_json::to_string_pretty(&segments).map_err(std::io::Error::other)?;
     std::fs::write(path, json)
 }
 
@@ -75,8 +86,8 @@ pub fn load_memory_from_file(ram: &mut [u8; 65536], path: &Path) -> std::io::Res
         return Ok(());
     }
     let contents = std::fs::read_to_string(path)?;
-    let segments: Vec<MemorySegment> = serde_json::from_str(&contents)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+    let segments: Vec<MemorySegment> =
+        serde_json::from_str(&contents).map_err(std::io::Error::other)?;
     for seg in segments {
         if seg.data.len() % 2 != 0 {
             return Err(std::io::Error::new(
@@ -88,7 +99,7 @@ pub fn load_memory_from_file(ram: &mut [u8; 65536], path: &Path) -> std::io::Res
             .step_by(2)
             .map(|i| u8::from_str_radix(&seg.data[i..i + 2], 16))
             .collect::<Result<Vec<u8>, _>>()
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+            .map_err(std::io::Error::other)?;
         let start = seg.addr as usize;
         if start + bytes.len() <= 65536 {
             ram[start..start + bytes.len()].copy_from_slice(&bytes);
@@ -191,4 +202,3 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 }
-

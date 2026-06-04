@@ -32,4 +32,3 @@ mod tests {
         assert_eq!(TOTAL_TRACKS, 77);
     }
 }
-
