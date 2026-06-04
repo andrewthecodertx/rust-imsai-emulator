@@ -10,6 +10,7 @@ default-run = "imsai-cli"
 [lib]
 name = "rust_imsai_emulator"
 path = "src/lib.rs"
+doctest = false
 
 [[bin]]
 name = "imsai-cli"

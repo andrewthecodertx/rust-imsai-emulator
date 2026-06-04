@@ -1,5 +1,3 @@
-#![allow(missing_docs)] // Enum variant fields documented at variant level
-
 use std::fs;
 use std::path::Path;
 
