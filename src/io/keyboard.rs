@@ -1,4 +1,3 @@
-
 /// Keyboard controller for the IMSAI 8080
 pub struct Keyboard {
     buffer: Vec<u8>,
@@ -27,7 +26,7 @@ impl Keyboard {
         if self.position < self.buffer.len() {
             let ch = self.buffer[self.position];
             self.position += 1;
-            
+
             if self.position >= self.buffer.len() {
                 self.buffer.clear();
                 self.position = 0;
@@ -81,3 +80,4 @@ mod tests {
         assert_eq!(keyboard.read_char(), None);
     }
 }
+

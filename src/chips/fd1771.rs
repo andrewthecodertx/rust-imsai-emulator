@@ -1,4 +1,3 @@
-
 use crate::disk::DiskImage;
 
 const TRACKS_PER_DISK: u8 = 77;
@@ -117,7 +116,9 @@ impl Fd1771 {
     }
 
     pub fn eject_disk(&mut self, drive: usize) -> Option<DiskImage> {
-        if drive > 3 { return None; }
+        if drive > 3 {
+            return None;
+        }
         let disk = self.drives[drive].take();
         if drive == self.selected_drive as usize {
             self.status_reg |= S_NOT_READY;
@@ -126,12 +127,16 @@ impl Fd1771 {
     }
 
     pub fn get_disk(&self, drive: usize) -> Option<&DiskImage> {
-        if drive > 3 { return None; }
+        if drive > 3 {
+            return None;
+        }
         self.drives[drive].as_ref()
     }
 
     pub fn get_disk_mut(&mut self, drive: usize) -> Option<&mut DiskImage> {
-        if drive > 3 { return None; }
+        if drive > 3 {
+            return None;
+        }
         self.drives[drive].as_mut()
     }
 
@@ -140,7 +145,9 @@ impl Fd1771 {
     }
 
     pub fn select_drive(&mut self, drive: u8) {
-        if drive > 3 { return; }
+        if drive > 3 {
+            return;
+        }
         self.selected_drive = drive;
         self.update_ready_status();
         self.head_loaded = true;
@@ -238,7 +245,11 @@ impl Fd1771 {
     fn execute_type_i(&mut self, command: u8) {
         self.verify = command & 0x04 != 0;
         self.step_rate_ms = match command & 0x03 {
-            0 => 6, 1 => 6, 2 => 10, 3 => 20, _ => unreachable!(),
+            0 => 6,
+            1 => 6,
+            2 => 10,
+            3 => 20,
+            _ => unreachable!(),
         };
 
         let cmd_field = command & 0xF0;
@@ -412,7 +423,11 @@ impl Fd1771 {
 
     fn commit_write(&mut self) {
         let track = self.track_reg;
-        let sector = if self.sector_reg == 0 { 1 } else { self.sector_reg };
+        let sector = if self.sector_reg == 0 {
+            1
+        } else {
+            self.sector_reg
+        };
         let data = self.sector_buffer;
 
         match self.current_disk_mut() {
@@ -614,7 +629,10 @@ mod tests {
     fn test_read_sector_basic() {
         let mut fdc = make_controller_with_disk();
         let pattern = [0xAA; SECTOR_SIZE];
-        fdc.get_disk_mut(0).unwrap().write_sector(0, 1, &pattern).unwrap();
+        fdc.get_disk_mut(0)
+            .unwrap()
+            .write_sector(0, 1, &pattern)
+            .unwrap();
         fdc.write_register(1, 0);
         fdc.write_register(2, 1);
         fdc.write_register(0, 0x88);
@@ -723,7 +741,10 @@ mod tests {
     fn test_sector0_treated_as_sector1() {
         let mut fdc = make_controller_with_disk();
         let pattern = [0xBB; SECTOR_SIZE];
-        fdc.get_disk_mut(0).unwrap().write_sector(0, 1, &pattern).unwrap();
+        fdc.get_disk_mut(0)
+            .unwrap()
+            .write_sector(0, 1, &pattern)
+            .unwrap();
         fdc.write_register(1, 0);
         fdc.write_register(2, 0);
         fdc.write_register(0, 0x88);
@@ -733,3 +754,4 @@ mod tests {
         }
     }
 }
+
