@@ -88,7 +88,7 @@ keyboard -> type_text() -> RX buffer -> read_data() -> CPU IN port 0x00
 
 - **TxRDY is bit 0 (0x01), not bit 1 (0x02).** Checking the wrong bit
   (0x02) tests RxRDY instead, which causes infinite loops waiting for TX.
-  This is a common CP/M BIOS bug.
+  This is a common serial BIOS bug.
 - **Mode instruction must precede command instruction.** The 8251A ignores
   command bytes until a mode instruction sets the character length, parity,
   and stop bits.
@@ -182,13 +182,13 @@ The disk image format matches the IBM 3740 single-density 8" floppy:
 - 77 tracks, 26 sectors per track, 128 bytes per sector (256,256 bytes total)
 - Sectors are numbered 1-26 (physical). Logical sector numbering is 0-25.
 - The 6:1 interleave skew table maps logical to physical.
-- CP/M reserves tracks 0-1 for the system (boot + OS kernel).
-- The entire disk initializes to 0xE5 (CP/M convention for unused sectors).
+- Tracks 0-1 are reserved for the system (boot + OS kernel).
+- The entire disk initializes to 0xE5 (standard fill byte for unused sectors).
 
 ## Tarbell Board Port Aliases
 
 The Tarbell 1011 board mirrors FD1771 register ports at 0xF8-0xFB. Some
-CP/M BIOS versions use these aliases. The mapping:
+disk BIOS versions use these aliases. The mapping:
 
 | Primary | Alias | Register       |
 |---------|-------|----------------|

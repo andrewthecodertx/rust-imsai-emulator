@@ -9,7 +9,7 @@ pub struct DiskImage {
 }
 
 impl DiskImage {
-    /// New disk filled with 0xE5 (CP/M convention for unused sectors).
+    /// New disk filled with 0xE5 (standard fill byte for unused sectors).
     pub fn new_formatted() -> Self {
         Self {
             data: vec![0xE5; DISK_SIZE],
@@ -72,7 +72,7 @@ impl DiskImage {
     pub fn data_mut(&mut self) -> &mut [u8] { self.dirty = true; &mut self.data }
 }
 
-/// Convert CP/M logical sector (0-25) to physical sector (1-26) using 6:1 interleave.
+/// Convert logical sector (0-25) to physical sector (1-26) using 6:1 interleave.
 pub fn logical_to_physical(logical: u8) -> u8 {
     if (logical as usize) < SKEW_TABLE.len() {
         SKEW_TABLE[logical as usize]

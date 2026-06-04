@@ -733,7 +733,7 @@ fn main() {
         }
         // R: Cold reset (clear memory, STOPPED, delete saved state).
         // Suppressed while running so typing an 'R' at a console prompt
-        // (e.g. CP/M's DIR) doesn't wipe the machine -- stop with F5 first.
+        // doesn't wipe the machine -- stop with F5 first.
         if matches!(picker, PickerState::Closed)
             && (emu.panel.is_stopped() || emu.cpu.halted)
             && rl.is_key_pressed(KeyboardKey::KEY_R)
@@ -753,7 +753,7 @@ fn main() {
 
         // Keyboard input for the console terminal (only while running and the
         // picker is closed). Forwards keystrokes to the 8251A UART RX so you
-        // can interact with software running on the machine (e.g. CP/M).
+        // can interact with software running on the machine.
         //
         // - Printable characters are sent as-typed (case preserved).
         // - Ctrl+<A..Z> are sent as control codes 0x01..0x1A (so Ctrl+C warm

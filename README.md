@@ -8,7 +8,7 @@ A Rust emulator for the IMSAI 8080 with a Tarbell FD1771 floppy controller and r
 
 Emulates the IMSAI 8080 hardware: Intel 8080 CPU, 64KB RAM, Tarbell FD1771 floppy disk controller, and IMSAI SIO-2 dual serial board. Supports interactive terminal mode (CLI) and a visual front panel GUI.
 
-**Current status**: Boots and runs programs loaded via `--load` or `--program`. Terminal mode provides interactive keyboard input and console output. A custom CP/M BIOS and disk I/O path are needed for CP/M execution and are not yet implemented.
+**Current status**: Boots and runs programs loaded via `--load` or `--program`. Terminal mode provides interactive keyboard input and console output. Disk images can be mounted and the FD1771 controller is modeled, but there is no disk boot loader yet.
 
 ## Hardware Emulated
 
@@ -89,6 +89,9 @@ cargo run --bin imsai-gui -- --program programs/hello-world.json
 | EXAMINE button                  | Read byte at address switches into data LEDs        |
 | DEPOSIT button                  | Write data switches into memory at address switches |
 | EX NXT / DEP NXT                | Increment address then examine/deposit              |
+| F2                              | Open program loader (pick a `.json` from `programs/`) |
+| F3                              | Save current memory region as a front panel program |
+| F4                              | Mount a disk image in drive A                       |
 | R key                           | Cold reset (clear RAM, delete `imsai_memory.json`) |
 | Keyboard (when running)         | Send characters to console UART                    |
 
@@ -128,17 +131,19 @@ Options:
 | Letters   | Sent as uppercase                      |
 | Enter     | Sends CR (0x0D)                         |
 | Backspace | Sends DEL (0x7F)                        |
+| Tab       | Sends TAB (0x09)                        |
 | Escape    | Sends ESC (0x1B)                        |
 | Ctrl+key  | Sends control character (Ctrl+C = 0x03) |
-| Ctrl+]    | Exit emulator                           |
-| Ctrl+K    | Command mode (load, mount, program, go, reset, quit) |
+| F5        | Start/stop CPU execution                |
+| Ctrl+K    | Command mode (load, program, mount, go/run, reset, quit, help) |
+| Ctrl+D    | Exit emulator                           |
 
 ## Known Limitations
 
 - Only 8" SSSD floppy format (77 tracks, 26 sectors, 128 bytes/sector)
 - No cycle-accurate timing
 - Serial I/O polling only (no interrupt-driven input)
-- No CP/M support (needs a compatible CCP+BDOS image for the Tarbell controller)
+- No disk boot loader yet (disks mount and the FD1771 is modeled, but the machine cannot boot from disk)
 
 ## License
 
