@@ -1,51 +1,31 @@
-
 use std::collections::VecDeque;
 
 /// Front panel function switches.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PanelSwitch {
-    /// Toggle between RUN and STOP
     RunStop,
-    /// Execute one instruction (M1 cycle), then stop
     SingleStep,
-    /// Read byte at address switch position into data LEDs
     Examine,
-    /// Write data switches into memory at address switch position
     Deposit,
-    /// Increment address, then examine
     ExamineNext,
-    /// Increment address, then deposit
     DepositNext,
 }
 
 /// Front panel status LEDs.
 #[derive(Debug, Clone, Default)]
 pub struct PanelLeds {
-    /// 16 address LEDs (true = ON, MSB first)
     pub address: [bool; 16],
-    /// 8 data LEDs (true = ON, MSB first)
     pub data: [bool; 8],
-    /// CPU is running (RUN LED)
     pub run: bool,
-    /// Machine cycle 1: instruction fetch (M1 LED)
     pub m1: bool,
-    /// Halt acknowledge: CPU executed HLT (HLTA status LED)
     pub hlta: bool,
-    /// CPU in wait state (WAIT LED)
     pub wait: bool,
-    /// Interrupt acknowledge (INT LED)
     pub int: bool,
-    /// Hold acknowledge, DMA in progress (HLDA LED)
     pub hlda: bool,
-    /// Power on (POWER LED)
     pub power: bool,
-    /// Memory read active (MEMR LED, inverted from S-100 ~MEMR)
     pub memr: bool,
-    /// Memory write active (MWRT LED)
     pub mwrt: bool,
-    /// I/O read active (shows when a card is being read)
     pub ior: bool,
-    /// I/O write active (shows when a card is being written)
     pub iow: bool,
 }
 
@@ -53,7 +33,7 @@ pub struct PanelLeds {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RunState {
     /// CPU halted, front panel drives address/data bus
-    Stopped,
+    Halted,
     /// CPU executing, front panel monitors bus
     Running,
 }
@@ -125,7 +105,7 @@ impl FrontPanel {
             address_switches: 0,
             data_switches: 0,
             leds: PanelLeds::default(),
-            run_state: RunState::Stopped,
+            run_state: RunState::Halted,
             pending_actions: Vec::new(),
             io_log: VecDeque::new(),
             io_log_capacity: 256,
@@ -141,7 +121,7 @@ impl FrontPanel {
     /// Set the 16 address toggle switches. Address LEDs update immediately.
     pub fn set_address_switches(&mut self, addr: u16) {
         self.address_switches = addr;
-        if self.run_state == RunState::Stopped {
+        if self.run_state == RunState::Halted {
             self.leds.address = u16_to_bool_array(addr);
         }
     }
@@ -168,7 +148,6 @@ impl FrontPanel {
         self.pending_actions.push(switch);
     }
 
-
     /// Get the current LED state.
     pub fn leds(&self) -> &PanelLeds {
         &self.leds
@@ -186,7 +165,7 @@ impl FrontPanel {
 
     /// Check if the panel is in STOP mode.
     pub fn is_stopped(&self) -> bool {
-        self.run_state == RunState::Stopped
+        self.run_state == RunState::Halted
     }
 
     /// Get recent I/O events logged while the CPU was running.
@@ -203,7 +182,6 @@ impl FrontPanel {
     pub fn cycle_count(&self) -> u64 {
         self.cycle_count
     }
-
 
     /// Log an I/O read event (IN instruction).
     /// Call this from the bus when the CPU reads an I/O port.
@@ -330,7 +308,7 @@ impl FrontPanel {
         for action in actions {
             match action {
                 PanelSwitch::RunStop => {
-                    if self.run_state == RunState::Stopped {
+                    if self.run_state == RunState::Halted {
                         self.run_state = RunState::Running;
                         should_run = true;
                         // In a real IMSAI, pressing RUN starts the CPU
@@ -345,7 +323,7 @@ impl FrontPanel {
                         self.leds.wait = false;
                         self.leds.hlta = false;
                     } else {
-                        self.run_state = RunState::Stopped;
+                        self.run_state = RunState::Halted;
                         should_run = false;
                         self.leds.wait = true;
                     }
@@ -354,7 +332,7 @@ impl FrontPanel {
                     // Single step: advance one instruction, then stop.
                     // The caller handles the actual CPU step.
                     should_run = false;
-                    self.run_state = RunState::Stopped;
+                    self.run_state = RunState::Halted;
                     self.leds.wait = true;
                 }
                 PanelSwitch::Examine => {
@@ -391,11 +369,7 @@ impl FrontPanel {
     /// This is the single-step operation: run the CPU for one instruction,
     /// then stop. The address and data LEDs show the new PC and the
     /// byte at that address. Status LEDs show what happened.
-    pub fn do_single_step(
-        &mut self,
-        bus: &mut crate::bus::ImsaiBus,
-        cpu: &mut intel8080::Cpu8080,
-    ) {
+    pub fn do_single_step(&mut self, bus: &mut crate::bus::ImsaiBus, cpu: &mut intel8080::Cpu8080) {
         let pc_before = cpu.pc;
         cpu.step(bus);
 
@@ -408,7 +382,6 @@ impl FrontPanel {
         self.leds.wait = true;
         self.address_switches = cpu.pc;
 
-
         self.io_log.push_back(IoEvent {
             cycle: cpu.cycles,
             address: pc_before,
@@ -418,7 +391,6 @@ impl FrontPanel {
             is_output: false,
         });
     }
-
 
     /// Examine: put the address switches on the address bus, assert
     /// MEMR, and latch the data bus into the data LEDs.
@@ -494,7 +466,7 @@ mod tests {
     #[test]
     fn test_power_on_state() {
         let panel = FrontPanel::new();
-        assert_eq!(panel.run_state(), RunState::Stopped);
+        assert_eq!(panel.run_state(), RunState::Halted);
         assert!(!panel.is_running());
         assert!(panel.is_stopped());
         assert_eq!(panel.address_switches(), 0);
@@ -537,7 +509,6 @@ mod tests {
         panel.press_switch(PanelSwitch::Examine);
         panel.process_actions(&mut bus, &mut cpu);
 
-
         assert_eq!(bool_array_to_u8(panel.leds().data), 0x42);
 
         assert_eq!(bool_array_to_u16(panel.leds().address), 0x00FF);
@@ -557,9 +528,7 @@ mod tests {
         panel.press_switch(PanelSwitch::Deposit);
         panel.process_actions(&mut bus, &mut cpu);
 
-
         assert!(panel.leds().mwrt);
-
 
         panel.set_data_switches(0x00);
         panel.press_switch(PanelSwitch::Examine);
@@ -690,7 +659,11 @@ mod tests {
             panel.set_data_switches(0x3E);
             panel.process_actions(&mut bus, &mut cpu);
         }
-        assert_eq!(panel.address_switches(), 0x0100, "address must stay latched");
+        assert_eq!(
+            panel.address_switches(),
+            0x0100,
+            "address must stay latched"
+        );
 
         // DEPOSIT writes the data byte at the latched address (not 0x013E).
         panel.press_switch(PanelSwitch::Deposit);
@@ -719,13 +692,20 @@ mod tests {
         panel.set_address_switches(0x0100);
         panel.press_switch(PanelSwitch::Examine);
         panel.process_actions(&mut bus, &mut cpu);
-        assert_eq!(cpu.pc, 0x0100, "EXAMINE should load PC from the address switches");
+        assert_eq!(
+            cpu.pc, 0x0100,
+            "EXAMINE should load PC from the address switches"
+        );
 
         // SINGLE STEP executes the NOP and advances; the panel address (and
         // address LEDs) must follow the new PC.
         panel.do_single_step(&mut bus, &mut cpu);
         assert_eq!(cpu.pc, 0x0101);
-        assert_eq!(panel.address_switches(), 0x0101, "address should follow the new PC");
+        assert_eq!(
+            panel.address_switches(),
+            0x0101,
+            "address should follow the new PC"
+        );
         assert_eq!(bool_array_to_u16(panel.leds().address), 0x0101);
     }
 
@@ -767,7 +747,6 @@ mod tests {
         panel.set_address_switches(0x1234);
         panel.press_switch(PanelSwitch::Examine);
         panel.process_actions(&mut bus, &mut cpu);
-
 
         assert_eq!(bool_array_to_u8(panel.leds().data), 0xFF);
     }
@@ -852,3 +831,4 @@ mod tests {
         assert_eq!(panel.cycle_count(), 500);
     }
 }
+

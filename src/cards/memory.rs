@@ -1,4 +1,3 @@
-
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
@@ -36,7 +35,9 @@ impl MemoryCard {
 }
 
 impl Default for MemoryCard {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 /// Save memory to a JSON file. Only non-0xFF regions are stored (sparse format).
@@ -85,7 +86,7 @@ pub fn load_memory_from_file(ram: &mut [u8; 65536], path: &Path) -> std::io::Res
         }
         let bytes: Vec<u8> = (0..seg.data.len())
             .step_by(2)
-            .map(|i| u8::from_str_radix(&seg.data[i..i+2], 16))
+            .map(|i| u8::from_str_radix(&seg.data[i..i + 2], 16))
             .collect::<Result<Vec<u8>, _>>()
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
         let start = seg.addr as usize;
@@ -190,3 +191,4 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 }
+
