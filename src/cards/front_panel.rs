@@ -1,8 +1,3 @@
-//! IMSAI 8080 front panel (switches and LEDs).
-//!
-//! The front panel is NOT an S-100 card. It directly accesses the address bus,
-//! data bus, and control lines. See `docs/INTERNALS.md` for bus monitoring
-//! behavior, single step, and RUN/STOP semantics.
 
 use std::collections::VecDeque;
 
@@ -143,12 +138,7 @@ impl FrontPanel {
         panel
     }
 
-    // -------------------------------------------------------------------
-    // Switch setters (the user/terminal sets these)
-    // -------------------------------------------------------------------
-
-    /// Set the 16 address toggle switches.
-    /// Address LEDs update immediately (hardwired in real hardware).
+    /// Set the 16 address toggle switches. Address LEDs update immediately.
     pub fn set_address_switches(&mut self, addr: u16) {
         self.address_switches = addr;
         if self.run_state == RunState::Stopped {
@@ -156,13 +146,9 @@ impl FrontPanel {
         }
     }
 
-    /// Set the 8 data toggle switches.
-    ///
-    /// This records the switch positions only. It deliberately does NOT drive
-    /// the data LEDs: on a real IMSAI the data lamps show the data *bus* (the
-    /// byte latched by the last EXAMINE/DEPOSIT, or live CPU activity in RUN),
-    /// not the switch positions. Mirroring the switches here would clobber the
-    /// value an EXAMINE just latched on the very next refresh.
+    /// Set the 8 data toggle switches. Does NOT drive the data LEDs: on a real
+    /// IMSAI, data lamps show the data bus (EXAMINE/DEPOSIT result or live CPU
+    /// activity), not the switch positions.
     pub fn set_data_switches(&mut self, data: u8) {
         self.data_switches = data;
     }
@@ -177,15 +163,11 @@ impl FrontPanel {
         self.data_switches
     }
 
-    /// Press a function switch. The action is queued and processed
-    /// on the next call to `process_actions()`.
+    /// Press a function switch. Queued and processed on next `process_actions()`.
     pub fn press_switch(&mut self, switch: PanelSwitch) {
         self.pending_actions.push(switch);
     }
 
-    // -------------------------------------------------------------------
-    // LED accessors
-    // -------------------------------------------------------------------
 
     /// Get the current LED state.
     pub fn leds(&self) -> &PanelLeds {
@@ -222,9 +204,6 @@ impl FrontPanel {
         self.cycle_count
     }
 
-    // -------------------------------------------------------------------
-    // Bus monitoring (called during CPU execution)
-    // -------------------------------------------------------------------
 
     /// Log an I/O read event (IN instruction).
     /// Call this from the bus when the CPU reads an I/O port.
@@ -256,7 +235,7 @@ impl FrontPanel {
         self.last_data = value;
         self.leds.iow = true;
         self.leds.ior = false;
-        self.leds.mwrt = false; // I/O write, not memory write
+        self.leds.mwrt = false;
 
         if self.io_log.len() >= self.io_log_capacity {
             self.io_log.pop_front();
@@ -331,9 +310,7 @@ impl FrontPanel {
         self.leds.mwrt = false;
     }
 
-    // -------------------------------------------------------------------
     // Action processing (called each emulator tick)
-    // -------------------------------------------------------------------
 
     /// Process all pending switch actions.
     ///
@@ -425,13 +402,13 @@ impl FrontPanel {
         // Update LEDs to show the new CPU state
         self.leds.address = u16_to_bool_array(cpu.pc);
         self.leds.data = u8_to_bool_array(bus.mem_read(cpu.pc));
-        self.leds.m1 = true; // Just completed an instruction fetch
+        self.leds.m1 = true;
         self.leds.hlta = cpu.halted; // HLT reached?
-        self.leds.run = false; // Stopped after single step
-        self.leds.wait = true; // Back in wait state
-        self.address_switches = cpu.pc; // Update switches to show new address
+        self.leds.run = false;
+        self.leds.wait = true;
+        self.address_switches = cpu.pc;
 
-        // Log this step
+
         self.io_log.push_back(IoEvent {
             cycle: cpu.cycles,
             address: pc_before,
@@ -442,9 +419,6 @@ impl FrontPanel {
         });
     }
 
-    // -------------------------------------------------------------------
-    // Internal: examine/deposit operations
-    // -------------------------------------------------------------------
 
     /// Examine: put the address switches on the address bus, assert
     /// MEMR, and latch the data bus into the data LEDs.
@@ -454,7 +428,7 @@ impl FrontPanel {
 
         self.leds.address = u16_to_bool_array(addr);
         self.leds.data = u8_to_bool_array(data);
-        self.leds.memr = true; // MEMR strobe
+        self.leds.memr = true;
         self.leds.mwrt = false;
     }
 
@@ -468,14 +442,12 @@ impl FrontPanel {
 
         self.leds.address = u16_to_bool_array(addr);
         self.leds.data = u8_to_bool_array(data);
-        self.leds.mwrt = true; // MWRT strobe
+        self.leds.mwrt = true;
         self.leds.memr = false;
     }
 }
 
-// -------------------------------------------------------------------
 // Utility: convert integers to bool arrays for LED display
-// -------------------------------------------------------------------
 
 fn u16_to_bool_array(val: u16) -> [bool; 16] {
     let mut arr = [false; 16];
@@ -529,7 +501,7 @@ mod tests {
         assert_eq!(panel.data_switches(), 0);
         assert!(panel.leds().power);
         assert!(!panel.leds().run);
-        assert!(panel.leds().wait); // CPU is waiting on power-on
+        assert!(panel.leds().wait);
     }
 
     #[test]
@@ -537,7 +509,7 @@ mod tests {
         let mut panel = FrontPanel::new();
         panel.set_address_switches(0x1234);
         assert_eq!(panel.address_switches(), 0x1234);
-        // LEDs should update when stopped
+
         assert_eq!(bool_array_to_u16(panel.leds().address), 0x1234);
     }
 
@@ -546,7 +518,7 @@ mod tests {
         let mut panel = FrontPanel::new();
         panel.set_data_switches(0xAB);
         assert_eq!(panel.data_switches(), 0xAB);
-        // The data switches must NOT drive the data LEDs -- those show the
+
         // data bus (EXAMINE/DEPOSIT result), so they stay clear here.
         assert_eq!(bool_array_to_u8(panel.leds().data), 0x00);
     }
@@ -565,11 +537,11 @@ mod tests {
         panel.press_switch(PanelSwitch::Examine);
         panel.process_actions(&mut bus, &mut cpu);
 
-        // Data LEDs should show 0x42 (the byte in memory)
+
         assert_eq!(bool_array_to_u8(panel.leds().data), 0x42);
-        // Address LEDs should show 0x00FF
+
         assert_eq!(bool_array_to_u16(panel.leds().address), 0x00FF);
-        // MEMR LED should be set (examine strobes it)
+
         assert!(panel.leds().memr);
     }
 
@@ -585,10 +557,10 @@ mod tests {
         panel.press_switch(PanelSwitch::Deposit);
         panel.process_actions(&mut bus, &mut cpu);
 
-        // MWRT LED should be set (deposit strobes it)
+
         assert!(panel.leds().mwrt);
 
-        // Read it back via examine
+
         panel.set_data_switches(0x00);
         panel.press_switch(PanelSwitch::Examine);
         panel.process_actions(&mut bus, &mut cpu);
@@ -796,7 +768,7 @@ mod tests {
         panel.press_switch(PanelSwitch::Examine);
         panel.process_actions(&mut bus, &mut cpu);
 
-        // Data LEDs should show memory content (0xFF), NOT the switches (0x00)
+
         assert_eq!(bool_array_to_u8(panel.leds().data), 0xFF);
     }
 

@@ -1,6 +1,3 @@
-//! Disk parameter constants for the Tarbell 8-inch floppy format.
-//!
-//! See `docs/INTERNALS.md` for the full CP/M disk layout and skew table.
 
 /// Sectors per track (128-byte sectors)
 pub const SPT: u16 = 26;

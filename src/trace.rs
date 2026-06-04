@@ -1,8 +1,3 @@
-//! Trace and diagnostic execution modes for the CLI
-//!
-//! Non-interactive execution modes: step trace, full trace, pc-trace,
-//! verbose trace, diagnostic, batch, and scripted. Each runs the CPU
-//! for a fixed number of instructions and produces debug output.
 
 use std::time::Instant;
 

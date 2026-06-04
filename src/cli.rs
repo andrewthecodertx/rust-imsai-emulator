@@ -1,30 +1,17 @@
-//! CLI argument parsing for imsai-cli
 
 /// Parsed command-line arguments.
 pub struct Args {
-    /// Load a raw binary at this address (if --load was given).
     pub load_path: Option<String>,
-    /// Address to load the raw binary at.
     pub load_addr: u16,
-    /// Load a front panel program (if --program was given).
     pub program_path: Option<String>,
-    /// Mount a disk image (if --disk was given).
     pub disk_path: Option<String>,
-    /// Pre-load keyboard input (if --cmd was given).
     pub cmd_text: Option<String>,
-    /// Enable step trace mode.
     pub step_trace: bool,
-    /// Enable full trace mode.
     pub trace: bool,
-    /// Enable verbose trace mode.
     pub verbose_trace: bool,
-    /// Enable diagnostic mode.
     pub diag: bool,
-    /// Enable PC ring-buffer trace mode.
     pub pc_trace: bool,
-    /// Batch mode (non-interactive).
     pub batch: bool,
-    /// Scripted mode (capture output).
     pub script: bool,
 }
 

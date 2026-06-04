@@ -1,13 +1,3 @@
-//! # IMSAI 8080 Emulator
-//!
-//! A Rust-based emulator for the IMSAI 8080 microcomputer system.
-//! Implements hardware-accurate chip and card models for the S-100 bus.
-//!
-//! Architecture:
-//! - Chips: silicon-level models (8251A UART, FD1771 FDC)
-//! - Cards: S-100 bus cards composed from chip models
-//! - Bus: passive S-100 backplane connecting CPU and cards
-//! - Imsai8080: top-level struct holding CPU + bus
 
 #![warn(missing_docs)]
 

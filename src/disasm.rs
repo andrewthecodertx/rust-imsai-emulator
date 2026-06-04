@@ -1,4 +1,3 @@
-//! Intel 8080 disassembler for trace/diagnostic output
 
 /// Disassemble a single 8080 instruction from up to 4 bytes at the given PC.
 ///
@@ -11,14 +10,11 @@ pub fn disassemble_8080(bytes: [u8; 4]) -> String {
     let addr = lo as u16 | (hi as u16) << 8;
 
     match op {
-        // NOP
         0x00 => "NOP".into(),
-        // LXI
         0x01 => format!("LXI BC,0x{:04X}", addr),
         0x11 => format!("LXI DE,0x{:04X}", addr),
         0x21 => format!("LXI HL,0x{:04X}", addr),
         0x31 => format!("LXI SP,0x{:04X}", addr),
-        // JMP/JNZ/JZ/JNC/JC
         0xC3 => format!("JMP 0x{:04X}", addr),
         0xC2 => format!("JNZ 0x{:04X}", addr),
         0xCA => format!("JZ 0x{:04X}", addr),
@@ -28,7 +24,6 @@ pub fn disassemble_8080(bytes: [u8; 4]) -> String {
         0xEA => format!("JPE 0x{:04X}", addr),
         0xF2 => format!("JP 0x{:04X}", addr),
         0xFA => format!("JM 0x{:04X}", addr),
-        // CALL/RET
         0xCD => format!("CALL 0x{:04X}", addr),
         0xC4 => format!("CNZ 0x{:04X}", addr),
         0xCC => format!("CZ 0x{:04X}", addr),
@@ -39,7 +34,6 @@ pub fn disassemble_8080(bytes: [u8; 4]) -> String {
         0xC8 => "RZ".into(),
         0xD0 => "RNC".into(),
         0xD8 => "RC".into(),
-        // MVI
         0x3E => format!("MVI A,0x{:02X}", lo),
         0x06 => format!("MVI B,0x{:02X}", lo),
         0x0E => format!("MVI C,0x{:02X}", lo),
@@ -48,10 +42,8 @@ pub fn disassemble_8080(bytes: [u8; 4]) -> String {
         0x26 => format!("MVI H,0x{:02X}", lo),
         0x2E => format!("MVI L,0x{:02X}", lo),
         0x36 => format!("MVI M,0x{:02X}", lo),
-        // IN/OUT
         0xDB => format!("IN 0x{:02X}", lo),
         0xD3 => format!("OUT 0x{:02X}", lo),
-        // MOV (common ones)
         0x7F => "MOV A,A".into(),
         0x78 => "MOV A,B".into(),
         0x79 => "MOV A,C".into(),
@@ -83,7 +75,6 @@ pub fn disassemble_8080(bytes: [u8; 4]) -> String {
         0x77 => "MOV M,A".into(),
         0x70 => "MOV M,B".into(),
         0x71 => "MOV M,C".into(),
-        // Arithmetic/Logic
         0x80..=0x8F => {
             let names = ["ADD", "ADC", "SUB", "SBB", "ANA", "XRA", "ORA", "CMP"];
             let reg = op & 0x07;
@@ -91,7 +82,6 @@ pub fn disassemble_8080(bytes: [u8; 4]) -> String {
             let reg_name = ["B", "C", "D", "E", "H", "L", "M", "A"][reg as usize];
             format!("{} {}", op_name, reg_name)
         }
-        // Increment/Decrement
         0x04 => "INR B".into(),
         0x0C => "INR C".into(),
         0x14 => "INR D".into(),
@@ -108,7 +98,6 @@ pub fn disassemble_8080(bytes: [u8; 4]) -> String {
         0x2D => "DCR L".into(),
         0x35 => "DCR M".into(),
         0x3D => "DCR A".into(),
-        // INX/DCX
         0x03 => "INX BC".into(),
         0x13 => "INX DE".into(),
         0x23 => "INX HL".into(),
@@ -117,12 +106,10 @@ pub fn disassemble_8080(bytes: [u8; 4]) -> String {
         0x1B => "DCX DE".into(),
         0x2B => "DCX HL".into(),
         0x3B => "DCX SP".into(),
-        // DAD
         0x09 => "DAD BC".into(),
         0x19 => "DAD DE".into(),
         0x29 => "DAD HL".into(),
         0x39 => "DAD SP".into(),
-        // Stack
         0xC5 => "PUSH BC".into(),
         0xD5 => "PUSH DE".into(),
         0xE5 => "PUSH HL".into(),
@@ -131,7 +118,6 @@ pub fn disassemble_8080(bytes: [u8; 4]) -> String {
         0xD1 => "POP DE".into(),
         0xE1 => "POP HL".into(),
         0xF1 => "POP PSW".into(),
-        // Memory
         0x32 => format!("STA 0x{:04X}", addr),
         0x3A => format!("LDA 0x{:04X}", addr),
         0x22 => format!("SHLD 0x{:04X}", addr),
@@ -139,7 +125,6 @@ pub fn disassemble_8080(bytes: [u8; 4]) -> String {
         0xEB => "XCHG".into(),
         0xE3 => "XTHL".into(),
         0xF9 => "SPHL".into(),
-        // Immediate
         0xC6 => format!("ADI 0x{:02X}", lo),
         0xCE => format!("ACI 0x{:02X}", lo),
         0xD6 => format!("SUI 0x{:02X}", lo),
@@ -148,16 +133,13 @@ pub fn disassemble_8080(bytes: [u8; 4]) -> String {
         0xEE => format!("XRI 0x{:02X}", lo),
         0xF6 => format!("ORI 0x{:02X}", lo),
         0xFE => format!("CPI 0x{:02X}", lo),
-        // Control
         0x76 => "HLT".into(),
         0xF3 => "DI".into(),
         0xFB => "EI".into(),
         0xE9 => "PCHL".into(),
-        // RST
         0xC7 | 0xCF | 0xD7 | 0xDF | 0xE7 | 0xEF | 0xF7 | 0xFF => {
             format!("RST {}", (op >> 3) & 7)
         }
-        // MOV r,r (remaining)
         _ => {
             if op >> 6 == 0b01 {
                 let dst = (op >> 3) & 7;
@@ -216,7 +198,6 @@ mod tests {
 
     #[test]
     fn test_disassemble_generic_mov() {
-        // 0x51 = 01 010 001 = MOV D,C
         assert_eq!(disassemble_8080([0x51, 0, 0, 0]), "MOV D,C");
     }
 

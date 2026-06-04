@@ -1,6 +1,3 @@
-//! S-100 bus card implementations.
-//!
-//! See `docs/HARDWARE.md` for the hardware overview.
 
 mod front_panel;
 mod memory;

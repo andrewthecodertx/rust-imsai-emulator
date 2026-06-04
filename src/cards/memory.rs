@@ -1,6 +1,3 @@
-//! Memory card: 64KB static RAM on the S-100 bus.
-//!
-//! See `docs/HARDWARE.md` for the hardware overview.
 
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -17,27 +14,22 @@ struct MemorySegment {
 /// Uninitialized bus reads return 0xFF (floating bus state).
 /// The RAM array is initialized to 0xFF on creation.
 pub struct MemoryCard {
-    /// 64K RAM, initialized to 0xFF (floating bus state)
     pub ram: [u8; 65536],
 }
 
 impl MemoryCard {
-    /// Create a new memory card with all bytes set to 0xFF (floating bus).
     pub fn new() -> Self {
         Self { ram: [0xFF; 65536] }
     }
 
-    /// Create a new memory card with all bytes zeroed.
     pub fn new_zeroed() -> Self {
         Self { ram: [0x00; 65536] }
     }
 
-    /// Read a byte from RAM (direct array access, no dispatch).
     pub fn read(&self, addr: u16) -> u8 {
         self.ram[addr as usize]
     }
 
-    /// Write a byte to RAM (direct array access, no dispatch).
     pub fn write(&mut self, addr: u16, value: u8) {
         self.ram[addr as usize] = value;
     }

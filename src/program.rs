@@ -1,7 +1,3 @@
-//! Front panel program loading and execution
-//!
-//! Panel programs are JSON files describing sequences of switch positions
-//! and button presses, just like operating the real IMSAI front panel.
 
 #![allow(missing_docs)] // Enum variant fields documented at variant level
 
@@ -155,7 +151,6 @@ pub fn memory_to_program(emu: &Imsai8080, start: u16, len: u16) -> PanelProgram 
         offset += chunk_size;
     }
 
-    // First chunk uses "load" at the start address; subsequent chunks continue
     for (i, chunk) in hex_bytes.iter().enumerate() {
         let addr = start.wrapping_add((i * 16) as u16);
         steps.push(PanelStep::Load {

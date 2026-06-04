@@ -1,8 +1,3 @@
-//! Terminal UI (TUI) for the IMSAI 8080 CLI
-//!
-//! Provides the interactive 80x24 CRT display, status bar, and in-TUI
-//! command modal (Ctrl+K). Uses crossterm for terminal raw mode and
-//! event handling.
 
 use std::io::{self, Write};
 use std::path::PathBuf;
@@ -26,11 +21,8 @@ enum BottomMode {
 
 /// Result of executing a TUI command.
 pub struct CommandResult {
-    /// Close the modal and return to the main loop?
     pub close: bool,
-    /// Did a run-type command (load/program/go) execute?
     pub ran: bool,
-    /// Status message to display.
     pub message: String,
 }
 
@@ -269,7 +261,6 @@ pub fn run_terminal(emu: &mut rust_imsai_emulator::Imsai8080) {
     print!("\x1B[2J\x1B[H");
     stdout.flush().ok();
 
-    // If no program loaded, enter command mode immediately
     if emu.bus.mem_read(0x0000) == 0xFF && emu.cpu.pc == 0x0000 {
         run_command_modal(emu, &mut stdout, &mut program_name);
         if emu.bus.mem_read(0x0000) == 0xFF && emu.cpu.pc == 0x0000 {
@@ -287,7 +278,6 @@ pub fn run_terminal(emu: &mut rust_imsai_emulator::Imsai8080) {
     let mut last_display: String = String::new();
     let start_time = Instant::now();
 
-    // Start in RUN mode (program already loaded and PC set)
     if emu.panel.is_stopped() {
         emu.panel.press_switch(rust_imsai_emulator::PanelSwitch::RunStop);
         emu.process_panel();

@@ -1,13 +1,3 @@
-//! IMSAI 8080 Front Panel - Raylib GUI
-//!
-//! Visual emulation of the IMSAI 8080 front panel. Toggle switches, LEDs,
-//! and function buttons. No ROM, no CP/M, just hardware.
-//!
-//! Usage:
-//!   imsai-gui                 Start with empty memory (or saved state), front panel only
-//!   imsai-gui --program      Load a front panel program (.json)
-//!   imsai-gui --load <file> [addr]  Load binary at address (default 0x0000)
-//!   imsai-gui --disk <file>  Mount disk image in drive A
 
 use raylib::prelude::RaylibDraw;
 use std::env;
@@ -128,7 +118,6 @@ const MONO_FONT_PATHS: &[&str] = &[
 ];
 
 // Window size
-//
 // The window is resizable. The panel layout is authored at REF_W x REF_H
 // (scale = 1.0); we render the entire UI into a render texture at this
 // resolution, then blit it scaled to the window. Hit tests divide mouse
@@ -140,22 +129,16 @@ const MIN_SCALE: f32 = 0.55;
 const MIN_W: i32 = 704;  // ceil(1280 * 0.55)
 const MIN_H: i32 = 462;  // ceil(840 * 0.55)
 
-// === IMSAI 8080 front panel layout ===
-// The real panel is a black face. LEDs and switches are organized into two
-// 8-bit byte-blocks (A15-A8 left, A7-A0 right) separated by a central seam,
-// with the IMSAI logo and the control switches on the right.
 const PX: i32 = 16; // panel left
 const PY: i32 = 12; // panel top
 const PW: i32 = 1248; // panel width
 const PH: i32 = 360; // panel height
 
-// Column geometry shared by LED rows and the switch row.
 const COL_STEP: i32 = 34; // center-to-center within a nibble
 const NIBBLE_GAP: i32 = 16; // extra gap between the two nibbles of a byte
 const LBYTE_X0: i32 = PX + 56; // center of MSB (leftmost) LED, left byte
 const RBYTE_X0: i32 = PX + 474; // center of MSB LED, right byte
 
-// LED row baselines (vertical centers).
 const Y_PROG: i32 = PY + 96; // PROGRAMMED OUTPUT
 const Y_STAT: i32 = PY + 166; // STATUS BYTE (left) + DATA BUS (right)
 const Y_ADDR: i32 = PY + 236; // ADDRESS BUS (16) + mode LEDs (right)
@@ -163,16 +146,12 @@ const Y_SW: i32 = PY + 290; // switch row top edge
 
 const LED_RAD: f32 = 7.0;
 
-// Paddle switch dimensions.
 const PADDLE_W: i32 = 28;
 const PADDLE_H: i32 = 50;
 
-// Control switches (right cluster): EXAMINE, DEPOSIT, RESET, RUN, STEP, PWR.
-// Grouped into a cluster, spaced enough for the word labels to stay readable.
 const CTRL_STEP: i32 = 54;
 const CTRL_X0: i32 = PX + 899; // center of first control paddle
 
-// Terminal dimensions
 const TERM_COLS: usize = 80;
 const TERM_ROWS: usize = 24;
 const TERM_CHAR_W: i32 = 11;
