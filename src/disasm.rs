@@ -1,4 +1,3 @@
-
 /// Disassemble a single 8080 instruction from up to 4 bytes at the given PC.
 ///
 /// Returns a human-readable instruction string. Unknown opcodes fall back
@@ -145,7 +144,10 @@ pub fn disassemble_8080(bytes: [u8; 4]) -> String {
                 let dst = (op >> 3) & 7;
                 let src = op & 7;
                 let reg_names = ["B", "C", "D", "E", "H", "L", "M", "A"];
-                format!("MOV {},{}", reg_names[dst as usize], reg_names[src as usize])
+                format!(
+                    "MOV {},{}",
+                    reg_names[dst as usize], reg_names[src as usize]
+                )
             } else {
                 format!("0x{:02X}", op)
             }
@@ -218,3 +220,4 @@ mod tests {
         assert_eq!(port_name(0x10), "");
     }
 }
+

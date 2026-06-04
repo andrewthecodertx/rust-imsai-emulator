@@ -1,4 +1,3 @@
-
 use crate::bus::ImsaiBus;
 use crate::cards::FrontPanel;
 #[cfg(test)]
@@ -170,3 +169,4 @@ mod tests {
         val
     }
 }
+

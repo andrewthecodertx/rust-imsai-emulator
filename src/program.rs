@@ -1,4 +1,3 @@
-
 #![allow(missing_docs)] // Enum variant fields documented at variant level
 
 use std::fs;
@@ -72,8 +71,8 @@ pub fn execute_panel_program(emu: &mut Imsai8080, prog: &PanelProgram) -> Result
             PanelStep::Deposit { address, data } => {
                 let addr = parse_hex16(address)
                     .map_err(|e| format!("Step {}: deposit address: {}", i, e))?;
-                let byte = parse_hex8(data)
-                    .map_err(|e| format!("Step {}: deposit data: {}", i, e))?;
+                let byte =
+                    parse_hex8(data).map_err(|e| format!("Step {}: deposit data: {}", i, e))?;
                 emu.panel.set_address_switches(addr);
                 emu.panel.set_data_switches(byte);
                 emu.panel.press_switch(PanelSwitch::Deposit);
@@ -98,17 +97,17 @@ pub fn execute_panel_program(emu: &mut Imsai8080, prog: &PanelProgram) -> Result
                 emu.process_panel();
             }
             PanelStep::Run { address } => {
-                let addr = parse_hex16(address)
-                    .map_err(|e| format!("Step {}: run address: {}", i, e))?;
+                let addr =
+                    parse_hex16(address).map_err(|e| format!("Step {}: run address: {}", i, e))?;
                 emu.panel.set_address_switches(addr);
                 emu.panel.press_switch(PanelSwitch::RunStop);
                 emu.process_panel();
             }
             PanelStep::Load { address, data } => {
-                let addr = parse_hex16(address)
-                    .map_err(|e| format!("Step {}: load address: {}", i, e))?;
-                let bytes = parse_hex_bytes(data)
-                    .map_err(|e| format!("Step {}: load data: {}", i, e))?;
+                let addr =
+                    parse_hex16(address).map_err(|e| format!("Step {}: load address: {}", i, e))?;
+                let bytes =
+                    parse_hex_bytes(data).map_err(|e| format!("Step {}: load data: {}", i, e))?;
                 emu.load_program(addr, &bytes);
             }
         }
@@ -189,7 +188,9 @@ mod tests {
                     address: "0000".to_string(),
                     data: "3E 41 D3 00 C3 00 00".to_string(),
                 },
-                PanelStep::Run { address: "0000".to_string() },
+                PanelStep::Run {
+                    address: "0000".to_string(),
+                },
             ],
         };
         assert!(execute_panel_program(&mut emu, &prog).is_ok());
@@ -203,12 +204,10 @@ mod tests {
         let prog = PanelProgram {
             name: "bad".to_string(),
             description: String::new(),
-            steps: vec![
-                PanelStep::Deposit {
-                    address: "ZZZZ".to_string(),
-                    data: "41".to_string(),
-                },
-            ],
+            steps: vec![PanelStep::Deposit {
+                address: "ZZZZ".to_string(),
+                data: "41".to_string(),
+            }],
         };
         let result = execute_panel_program(&mut emu, &prog);
         assert!(result.is_err());
@@ -221,12 +220,10 @@ mod tests {
         let prog = PanelProgram {
             name: "bad".to_string(),
             description: String::new(),
-            steps: vec![
-                PanelStep::Deposit {
-                    address: "0100".to_string(),
-                    data: "ZZ".to_string(),
-                },
-            ],
+            steps: vec![PanelStep::Deposit {
+                address: "0100".to_string(),
+                data: "ZZ".to_string(),
+            }],
         };
         let result = execute_panel_program(&mut emu, &prog);
         assert!(result.is_err());
@@ -239,12 +236,10 @@ mod tests {
         let prog = PanelProgram {
             name: "bad".to_string(),
             description: String::new(),
-            steps: vec![
-                PanelStep::Load {
-                    address: "0100".to_string(),
-                    data: "3E ZZ".to_string(),
-                },
-            ],
+            steps: vec![PanelStep::Load {
+                address: "0100".to_string(),
+                data: "3E ZZ".to_string(),
+            }],
         };
         let result = execute_panel_program(&mut emu, &prog);
         assert!(result.is_err());
@@ -257,9 +252,9 @@ mod tests {
         let prog = PanelProgram {
             name: "bad".to_string(),
             description: String::new(),
-            steps: vec![
-                PanelStep::Run { address: "GGGG".to_string() },
-            ],
+            steps: vec![PanelStep::Run {
+                address: "GGGG".to_string(),
+            }],
         };
         let result = execute_panel_program(&mut emu, &prog);
         assert!(result.is_err());
@@ -273,15 +268,24 @@ mod tests {
             name: "bad".to_string(),
             description: String::new(),
             steps: vec![
-                PanelStep::Deposit { address: "0100".to_string(), data: "41".to_string() },
-                PanelStep::Load { address: "XXXX".to_string(), data: "3E".to_string() },
+                PanelStep::Deposit {
+                    address: "0100".to_string(),
+                    data: "41".to_string(),
+                },
+                PanelStep::Load {
+                    address: "XXXX".to_string(),
+                    data: "3E".to_string(),
+                },
             ],
         };
         let result = execute_panel_program(&mut emu, &prog);
         assert!(result.is_err());
         let err = result.unwrap_err();
         // Step 1 (0-indexed) should be the failing one
-        assert!(err.contains("Step 1"), "Expected step index in error: {}", err);
+        assert!(
+            err.contains("Step 1"),
+            "Expected step index in error: {}",
+            err
+        );
     }
 }
-

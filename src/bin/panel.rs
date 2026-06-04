@@ -1,12 +1,11 @@
-
 use raylib::prelude::RaylibDraw;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use rust_imsai_emulator::{
-    execute_panel_program, find_program_start, load_program_file,
-    memory_to_program, save_program_file,
+    execute_panel_program, find_program_start, load_program_file, memory_to_program,
+    save_program_file,
 };
 
 /// State for the in-app file picker overlay.
@@ -88,10 +87,9 @@ use raylib::drawing::RaylibTextureModeExt;
 use raylib::math::Vector2;
 use raylib::text::RaylibFont;
 use rust_imsai_emulator::cards::PanelSwitch;
-use rust_imsai_emulator::Imsai8080;
-use rust_imsai_emulator::save_memory_to_file;
 use rust_imsai_emulator::load_memory_from_file;
-
+use rust_imsai_emulator::save_memory_to_file;
+use rust_imsai_emulator::Imsai8080;
 
 /// File where memory contents are persisted between sessions.
 const MEMORY_FILE: &str = "imsai_memory.json";
@@ -126,8 +124,8 @@ const MONO_FONT_PATHS: &[&str] = &[
 const REF_W: i32 = 1280;
 const REF_H: i32 = 840;
 const MIN_SCALE: f32 = 0.55;
-const MIN_W: i32 = 704;  // ceil(1280 * 0.55)
-const MIN_H: i32 = 462;  // ceil(840 * 0.55)
+const MIN_W: i32 = 704; // ceil(1280 * 0.55)
+const MIN_H: i32 = 462; // ceil(840 * 0.55)
 
 const PX: i32 = 16; // panel left
 const PY: i32 = 12; // panel top
@@ -179,7 +177,6 @@ fn ctrl_col_x(i: usize) -> i32 {
     CTRL_X0 + i as i32 * CTRL_STEP
 }
 
-
 fn main() {
     let args: Vec<String> = env::args().collect();
     let _bare = args.contains(&"--bare".to_string()); // kept for backward compat
@@ -212,7 +209,7 @@ fn main() {
     }
 
     let (mut rl, thread) = raylib::init()
-        .size(1024, 680)  // start small enough to fit a 1600x900 laptop screen
+        .size(1024, 680) // start small enough to fit a 1600x900 laptop screen
         .resizable()
         .title("IMSAI 8080 Microcomputer")
         .build();
@@ -376,9 +373,7 @@ fn main() {
         // size. Clamp at MIN_SCALE so the view never gets illegible.
         let win_w = rl.get_screen_width();
         let win_h = rl.get_screen_height();
-        let scale = ((win_w as f32 / REF_W as f32)
-            .min(win_h as f32 / REF_H as f32))
-            .max(MIN_SCALE);
+        let scale = ((win_w as f32 / REF_W as f32).min(win_h as f32 / REF_H as f32)).max(MIN_SCALE);
         // The blit is centered with letterboxing, so the layout-space
         // origin within the window is offset by half the unused space.
         let blit_ox = (win_w as f32 - REF_W as f32 * scale) * 0.5;
@@ -423,10 +418,11 @@ fn main() {
             // pressed. EXAMINE and RUN *latch* this into the panel's address
             // register; after that the low 8 switches are reused as DEPOSIT
             // data without disturbing the latched address (real IMSAI behavior).
-            let sw_addr: u16 = addr_sw
-                .iter()
-                .enumerate()
-                .fold(0u16, |a, (i, &on)| if on { a | (1 << (15 - i)) } else { a });
+            let sw_addr: u16 =
+                addr_sw
+                    .iter()
+                    .enumerate()
+                    .fold(0u16, |a, (i, &on)| if on { a | (1 << (15 - i)) } else { a });
             for i in 0..6usize {
                 let cx = ctrl_col_x(i);
                 let left = (cx - PADDLE_W / 2) as f32;
@@ -474,10 +470,11 @@ fn main() {
         // Keyboard shortcuts (F5 suppressed when picker is open)
         if matches!(picker, PickerState::Closed) && rl.is_key_pressed(KeyboardKey::KEY_F5) {
             if emu.panel.is_stopped() {
-                let sw_addr: u16 = addr_sw
-                    .iter()
-                    .enumerate()
-                    .fold(0u16, |a, (i, &on)| if on { a | (1 << (15 - i)) } else { a });
+                let sw_addr: u16 =
+                    addr_sw
+                        .iter()
+                        .enumerate()
+                        .fold(0u16, |a, (i, &on)| if on { a | (1 << (15 - i)) } else { a });
                 emu.panel.set_address_switches(sw_addr);
             }
             emu.panel.press_switch(PanelSwitch::RunStop);
@@ -737,7 +734,10 @@ fn main() {
         // R: Cold reset (clear memory, STOPPED, delete saved state).
         // Suppressed while running so typing an 'R' at a console prompt
         // (e.g. CP/M's DIR) doesn't wipe the machine -- stop with F5 first.
-        if matches!(picker, PickerState::Closed) && (emu.panel.is_stopped() || emu.cpu.halted) && rl.is_key_pressed(KeyboardKey::KEY_R) {
+        if matches!(picker, PickerState::Closed)
+            && (emu.panel.is_stopped() || emu.cpu.halted)
+            && rl.is_key_pressed(KeyboardKey::KEY_R)
+        {
             emu = Imsai8080::new();
             emu.panel.set_address_switches(0x0000);
             emu.process_panel();
@@ -1498,7 +1498,7 @@ fn main() {
 
         // === End picker overlay ===
 
-        });  // end draw_texture_mode
+        }); // end draw_texture_mode
 
         // ---- Blit the texture to the window, scaled to fit, centered. ----
         let dst_w = (REF_W as f32 * scale).round() as i32;
@@ -1513,7 +1513,12 @@ fn main() {
         // convention); use negative source height to flip back.
         d.draw_texture_pro(
             &target,
-            raylib::math::Rectangle { x: 0.0, y: 0.0, width: REF_W as f32, height: -REF_H as f32 },
+            raylib::math::Rectangle {
+                x: 0.0,
+                y: 0.0,
+                width: REF_W as f32,
+                height: -REF_H as f32,
+            },
             raylib::math::Rectangle {
                 x: dst_x as f32,
                 y: dst_y as f32,
@@ -1667,12 +1672,23 @@ fn draw_screw(d: &mut raylib::drawing::RaylibDrawHandle, cx: i32, cy: i32) {
 fn ptext(
     d: &mut raylib::drawing::RaylibDrawHandle,
     font: Option<&raylib::text::Font>,
-    text: &str, x: i32, y: i32, size: i32, color: raylib::color::Color,
+    text: &str,
+    x: i32,
+    y: i32,
+    size: i32,
+    color: raylib::color::Color,
 ) {
     match font {
         Some(f) => {
             let sp = (size as f32 * 0.06).max(1.0);
-            d.draw_text_ex(f, text, Vector2::new(x as f32, y as f32), size as f32, sp, color);
+            d.draw_text_ex(
+                f,
+                text,
+                Vector2::new(x as f32, y as f32),
+                size as f32,
+                sp,
+                color,
+            );
         }
         None => d.draw_text(text, x, y, size, color),
     }
@@ -1682,10 +1698,14 @@ fn ptext(
 fn ptext_w(
     d: &mut raylib::drawing::RaylibDrawHandle,
     font: Option<&raylib::text::Font>,
-    text: &str, size: i32,
+    text: &str,
+    size: i32,
 ) -> i32 {
     match font {
-        Some(f) => f.measure_text(text, size as f32, (size as f32 * 0.06).max(1.0)).x as i32,
+        Some(f) => {
+            f.measure_text(text, size as f32, (size as f32 * 0.06).max(1.0))
+                .x as i32
+        }
         None => d.measure_text(text, size),
     }
 }
@@ -1694,7 +1714,11 @@ fn ptext_w(
 fn ptext_c(
     d: &mut raylib::drawing::RaylibDrawHandle,
     font: Option<&raylib::text::Font>,
-    text: &str, cx: i32, y: i32, size: i32, color: raylib::color::Color,
+    text: &str,
+    cx: i32,
+    y: i32,
+    size: i32,
+    color: raylib::color::Color,
 ) {
     let w = ptext_w(d, font, text, size);
     ptext(d, font, text, cx - w / 2, y, size, color);
@@ -1721,15 +1745,30 @@ fn draw_paddle(
 
     // Thin dark gap/recess between adjacent keys.
     d.draw_rectangle_rounded(
-        Rectangle { x: x - 1.0, y: y - 1.0, width: w + 2.0, height: h + 2.0 },
+        Rectangle {
+            x: x - 1.0,
+            y: y - 1.0,
+            width: w + 2.0,
+            height: h + 2.0,
+        },
         round,
         6,
-        raylib::color::Color { r: 6, g: 6, b: 8, a: 255 },
+        raylib::color::Color {
+            r: 6,
+            g: 6,
+            b: 8,
+            a: 255,
+        },
     );
 
     // Bright plastic cap body.
     d.draw_rectangle_rounded(
-        Rectangle { x, y, width: w, height: h },
+        Rectangle {
+            x,
+            y,
+            width: w,
+            height: h,
+        },
         round,
         8,
         base,
@@ -1739,13 +1778,23 @@ fn draw_paddle(
     let top_lit = lighten(base, 28);
     let bottom_shade = darken(base, 70);
     d.draw_rectangle_rounded(
-        Rectangle { x: x + 1.0, y: y + 1.0, width: w - 2.0, height: h * 0.42 },
+        Rectangle {
+            x: x + 1.0,
+            y: y + 1.0,
+            width: w - 2.0,
+            height: h * 0.42,
+        },
         round,
         6,
         top_lit,
     );
     d.draw_rectangle_rounded(
-        Rectangle { x: x + 1.0, y: y + h * 0.72, width: w - 2.0, height: h * 0.26 },
+        Rectangle {
+            x: x + 1.0,
+            y: y + h * 0.72,
+            width: w - 2.0,
+            height: h * 0.26,
+        },
         round,
         6,
         bottom_shade,
@@ -1758,12 +1807,27 @@ fn draw_paddle(
     } else {
         // Tilted back: shade the upper face so the key reads as "down".
         d.draw_rectangle_rounded(
-            Rectangle { x: x + 1.0, y: y + 1.0, width: w - 2.0, height: h * 0.40 },
+            Rectangle {
+                x: x + 1.0,
+                y: y + 1.0,
+                width: w - 2.0,
+                height: h * 0.40,
+            },
             round,
             6,
-            raylib::color::Color { r: 0, g: 0, b: 0, a: 70 },
+            raylib::color::Color {
+                r: 0,
+                g: 0,
+                b: 0,
+                a: 70,
+            },
         );
-        d.draw_rectangle(x as i32 + 3, top_y + PADDLE_H - 9, PADDLE_W - 6, 4, lighten(base, 40));
+        d.draw_rectangle(
+            x as i32 + 3,
+            top_y + PADDLE_H - 9,
+            PADDLE_W - 6,
+            4,
+            lighten(base, 40),
+        );
     }
 }
-

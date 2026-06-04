@@ -1,4 +1,3 @@
-
 /// Parsed command-line arguments.
 pub struct Args {
     pub load_path: Option<String>,
@@ -108,3 +107,4 @@ fn print_usage(args: &Vec<String>) {
     eprintln!("  --cmd \"text\"             Pre-load keyboard input for scripted testing");
     eprintln!("  --help, -h                 Show this help");
 }
+

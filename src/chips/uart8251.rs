@@ -1,4 +1,3 @@
-
 use crate::io::Keyboard;
 
 const CMD_TX_ENABLE: u8 = 0x01;
@@ -180,7 +179,11 @@ impl Uart8251 {
             _ => unreachable!(),
         };
         self.parity = if value & 0x10 != 0 {
-            if value & 0x20 != 0 { Parity::Even } else { Parity::Odd }
+            if value & 0x20 != 0 {
+                Parity::Even
+            } else {
+                Parity::Odd
+            }
         } else {
             Parity::None
         };
@@ -458,7 +461,10 @@ mod tests {
         uart.write_control(0x05);
         uart.write_control(0x10);
         let status = uart.read_status();
-        assert_eq!(status & (STATUS_PARITY_ERR | STATUS_OVERRUN_ERR | STATUS_FRAMING_ERR), 0);
+        assert_eq!(
+            status & (STATUS_PARITY_ERR | STATUS_OVERRUN_ERR | STATUS_FRAMING_ERR),
+            0
+        );
     }
 
     #[test]
@@ -504,3 +510,4 @@ mod tests {
         assert!(uart.is_tx_enabled());
     }
 }
+

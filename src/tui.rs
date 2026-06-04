@@ -1,4 +1,3 @@
-
 use std::io::{self, Write};
 use std::path::PathBuf;
 use std::time::Instant;
@@ -120,10 +119,23 @@ fn run_command_modal(
         };
 
         match key {
-            KeyEvent { code: KeyCode::Esc, .. } => break,
-            KeyEvent { code: KeyCode::Char('k'), modifiers: KeyModifiers::CONTROL, .. } => break,
-            KeyEvent { code: KeyCode::Char('d'), modifiers: KeyModifiers::CONTROL, .. } => break,
-            KeyEvent { code: KeyCode::Enter, .. } => {
+            KeyEvent {
+                code: KeyCode::Esc, ..
+            } => break,
+            KeyEvent {
+                code: KeyCode::Char('k'),
+                modifiers: KeyModifiers::CONTROL,
+                ..
+            } => break,
+            KeyEvent {
+                code: KeyCode::Char('d'),
+                modifiers: KeyModifiers::CONTROL,
+                ..
+            } => break,
+            KeyEvent {
+                code: KeyCode::Enter,
+                ..
+            } => {
                 let result = run_command(emu, &input, program_name);
                 if result.close {
                     return result.ran;
@@ -131,17 +143,45 @@ fn run_command_modal(
                 last_message = Some(result.message.clone());
                 ever_ran = ever_ran || result.ran;
                 input.clear();
-                render_bottom_row(emu, program_name, BottomMode::Prompt, false, &input, last_message.as_deref());
+                render_bottom_row(
+                    emu,
+                    program_name,
+                    BottomMode::Prompt,
+                    false,
+                    &input,
+                    last_message.as_deref(),
+                );
                 stdout.flush().ok();
             }
-            KeyEvent { code: KeyCode::Backspace, .. } => {
+            KeyEvent {
+                code: KeyCode::Backspace,
+                ..
+            } => {
                 input.pop();
-                render_bottom_row(emu, program_name, BottomMode::Prompt, false, &input, last_message.as_deref());
+                render_bottom_row(
+                    emu,
+                    program_name,
+                    BottomMode::Prompt,
+                    false,
+                    &input,
+                    last_message.as_deref(),
+                );
                 stdout.flush().ok();
             }
-            KeyEvent { code: KeyCode::Char(ch), modifiers: KeyModifiers::NONE | KeyModifiers::SHIFT, .. } => {
+            KeyEvent {
+                code: KeyCode::Char(ch),
+                modifiers: KeyModifiers::NONE | KeyModifiers::SHIFT,
+                ..
+            } => {
                 input.push(ch);
-                render_bottom_row(emu, program_name, BottomMode::Prompt, false, &input, last_message.as_deref());
+                render_bottom_row(
+                    emu,
+                    program_name,
+                    BottomMode::Prompt,
+                    false,
+                    &input,
+                    last_message.as_deref(),
+                );
                 stdout.flush().ok();
             }
             _ => {}
@@ -159,16 +199,30 @@ fn run_command(
 ) -> CommandResult {
     let input = input.trim();
     if input.is_empty() {
-        return CommandResult { close: false, ran: false, message: String::new() };
+        return CommandResult {
+            close: false,
+            ran: false,
+            message: String::new(),
+        };
     }
 
     let parts: Vec<&str> = input.splitn(3, ' ').collect();
     let cmd = parts[0].to_lowercase();
-    let close = |msg: String| CommandResult { close: true, ran: false, message: msg };
-    let stay = |msg: String| CommandResult { close: false, ran: false, message: msg };
+    let close = |msg: String| CommandResult {
+        close: true,
+        ran: false,
+        message: msg,
+    };
+    let stay = |msg: String| CommandResult {
+        close: false,
+        ran: false,
+        message: msg,
+    };
 
     match cmd.as_str() {
-        "help" | "?" => stay(format!("Commands: load <file> [addr]  program <file.json>  mount <file>  go  run  reset  quit")),
+        "help" | "?" => stay(format!(
+            "Commands: load <file> [addr]  program <file.json>  mount <file>  go  run  reset  quit"
+        )),
         "load" => {
             let path = match parts.get(1) {
                 Some(p) => *p,
@@ -177,7 +231,8 @@ fn run_command(
             let addr: u16 = parts
                 .get(2)
                 .and_then(|s| {
-                    u16::from_str_radix(s.trim_start_matches("0x").trim_start_matches("0X"), 16).ok()
+                    u16::from_str_radix(s.trim_start_matches("0x").trim_start_matches("0X"), 16)
+                        .ok()
                 })
                 .unwrap_or(0);
             match std::fs::read(path) {
@@ -186,7 +241,11 @@ fn run_command(
                     emu.cpu.pc = addr;
                     emu.cpu.halted = false;
                     *program_name = path.to_string();
-                    CommandResult { close: true, ran: true, message: format!("Loaded {} bytes at 0x{:04X}", data.len(), addr) }
+                    CommandResult {
+                        close: true,
+                        ran: true,
+                        message: format!("Loaded {} bytes at 0x{:04X}", data.len(), addr),
+                    }
                 }
                 Err(e) => stay(format!("Error: {}", e)),
             }
@@ -206,7 +265,11 @@ fn run_command(
                             emu.cpu.pc = start;
                             emu.cpu.halted = false;
                             *program_name = prog.name.clone();
-                            CommandResult { close: true, ran: true, message: format!("Running {} (PC={:04X})...", prog.name, start) }
+                            CommandResult {
+                                close: true,
+                                ran: true,
+                                message: format!("Running {} (PC={:04X})...", prog.name, start),
+                            }
                         }
                         Err(e) => stay(format!("Program error: {}", e)),
                     }
@@ -226,19 +289,22 @@ fn run_command(
         }
         "go" | "run" => {
             if emu.panel.is_stopped() {
-                emu.panel.press_switch(rust_imsai_emulator::PanelSwitch::RunStop);
+                emu.panel
+                    .press_switch(rust_imsai_emulator::PanelSwitch::RunStop);
             }
             emu.cpu.halted = false;
-            CommandResult { close: true, ran: true, message: "Resuming execution. Press Ctrl+K to pause.".to_string() }
+            CommandResult {
+                close: true,
+                ran: true,
+                message: "Resuming execution. Press Ctrl+K to pause.".to_string(),
+            }
         }
         "reset" => {
             *emu = rust_imsai_emulator::Imsai8080::new();
             *program_name = String::new();
             stay("Cold reset. Memory cleared, CPU at 0x0000.".to_string())
         }
-        "quit" => {
-            close("Quitting.".to_string())
-        }
+        "quit" => close("Quitting.".to_string()),
         _ => stay("Unknown command. Type 'help' for the list.".to_string()),
     }
 }
@@ -279,7 +345,8 @@ pub fn run_terminal(emu: &mut rust_imsai_emulator::Imsai8080) {
     let start_time = Instant::now();
 
     if emu.panel.is_stopped() {
-        emu.panel.press_switch(rust_imsai_emulator::PanelSwitch::RunStop);
+        emu.panel
+            .press_switch(rust_imsai_emulator::PanelSwitch::RunStop);
         emu.process_panel();
     }
 
@@ -307,7 +374,14 @@ pub fn run_terminal(emu: &mut rust_imsai_emulator::Imsai8080) {
                 row += 1;
             }
 
-            render_bottom_row(emu, &program_name, BottomMode::Status, emu.panel.is_running(), "", None);
+            render_bottom_row(
+                emu,
+                &program_name,
+                BottomMode::Status,
+                emu.panel.is_running(),
+                "",
+                None,
+            );
             stdout.flush().ok();
         }
 
@@ -315,67 +389,105 @@ pub fn run_terminal(emu: &mut rust_imsai_emulator::Imsai8080) {
         while event::poll(poll_timeout).unwrap_or(false) {
             if let Ok(ev) = event::read() {
                 match ev {
-                    Event::Key(key_event) => {
-                        match key_event {
-                            KeyEvent { code: KeyCode::Esc, .. } => {
-                                emu.bus.console().type_text("\x1B");
-                                got_key = true;
-                            }
-                            KeyEvent { code: KeyCode::F(5), .. } => {
-                                emu.panel.press_switch(rust_imsai_emulator::PanelSwitch::RunStop);
-                                emu.process_panel();
-                                last_display.clear();
-                                got_key = true;
-                            }
-                            KeyEvent { code: KeyCode::Char('d'), modifiers: KeyModifiers::CONTROL, .. } => {
-                                print!("\r\n\r\n--- Ctrl+D pressed, shutting down ---\r\n");
-                                stdout.flush().ok();
-                                stdout.execute(LeaveAlternateScreen).ok();
-                                disable_raw_mode().ok();
-                                let elapsed = start_time.elapsed();
-                                let secs = elapsed.as_secs_f64();
-                                let ips = if secs > 0.0 { instruction_count as f64 / secs } else { 0.0 };
-                                eprintln!("Executed {} instructions in {:.2}s ({:.0} ips)", instruction_count, secs, ips);
-                                save_memory(emu);
-                                return;
-                            }
-                            KeyEvent { code: KeyCode::Char('k'), modifiers: KeyModifiers::CONTROL, .. } => {
-                                let ran_something = run_command_modal(emu, &mut stdout, &mut program_name);
-                                emu.process_panel();
-                                if ran_something && emu.panel.is_stopped() {
-                                    emu.panel.press_switch(rust_imsai_emulator::PanelSwitch::RunStop);
-                                    emu.process_panel();
-                                }
-                                last_display.clear();
-                                got_key = true;
-                            }
-                            KeyEvent { code: KeyCode::Char(ch), modifiers: KeyModifiers::CONTROL, .. } => {
-                                let ctrl_ch = (ch as u8) & 0x1F;
-                                if ctrl_ch != 0 {
-                                    emu.bus.serial().type_text(&String::from_utf8_lossy(&[ctrl_ch]));
-                                    got_key = true;
-                                }
-                            }
-                            KeyEvent { code: KeyCode::Char(ch), .. } => {
-                                let upper: String = ch.to_uppercase().collect();
-                                emu.bus.serial().type_text(&upper);
-                                got_key = true;
-                            }
-                            KeyEvent { code: KeyCode::Enter, .. } => {
-                                emu.bus.serial().type_text("\r");
-                                got_key = true;
-                            }
-                            KeyEvent { code: KeyCode::Backspace, .. } => {
-                                emu.bus.serial().type_text("\x7F");
-                                got_key = true;
-                            }
-                            KeyEvent { code: KeyCode::Tab, .. } => {
-                                emu.bus.serial().type_text("\t");
-                                got_key = true;
-                            }
-                            _ => {}
+                    Event::Key(key_event) => match key_event {
+                        KeyEvent {
+                            code: KeyCode::Esc, ..
+                        } => {
+                            emu.bus.console().type_text("\x1B");
+                            got_key = true;
                         }
-                    }
+                        KeyEvent {
+                            code: KeyCode::F(5),
+                            ..
+                        } => {
+                            emu.panel
+                                .press_switch(rust_imsai_emulator::PanelSwitch::RunStop);
+                            emu.process_panel();
+                            last_display.clear();
+                            got_key = true;
+                        }
+                        KeyEvent {
+                            code: KeyCode::Char('d'),
+                            modifiers: KeyModifiers::CONTROL,
+                            ..
+                        } => {
+                            print!("\r\n\r\n--- Ctrl+D pressed, shutting down ---\r\n");
+                            stdout.flush().ok();
+                            stdout.execute(LeaveAlternateScreen).ok();
+                            disable_raw_mode().ok();
+                            let elapsed = start_time.elapsed();
+                            let secs = elapsed.as_secs_f64();
+                            let ips = if secs > 0.0 {
+                                instruction_count as f64 / secs
+                            } else {
+                                0.0
+                            };
+                            eprintln!(
+                                "Executed {} instructions in {:.2}s ({:.0} ips)",
+                                instruction_count, secs, ips
+                            );
+                            save_memory(emu);
+                            return;
+                        }
+                        KeyEvent {
+                            code: KeyCode::Char('k'),
+                            modifiers: KeyModifiers::CONTROL,
+                            ..
+                        } => {
+                            let ran_something =
+                                run_command_modal(emu, &mut stdout, &mut program_name);
+                            emu.process_panel();
+                            if ran_something && emu.panel.is_stopped() {
+                                emu.panel
+                                    .press_switch(rust_imsai_emulator::PanelSwitch::RunStop);
+                                emu.process_panel();
+                            }
+                            last_display.clear();
+                            got_key = true;
+                        }
+                        KeyEvent {
+                            code: KeyCode::Char(ch),
+                            modifiers: KeyModifiers::CONTROL,
+                            ..
+                        } => {
+                            let ctrl_ch = (ch as u8) & 0x1F;
+                            if ctrl_ch != 0 {
+                                emu.bus
+                                    .serial()
+                                    .type_text(&String::from_utf8_lossy(&[ctrl_ch]));
+                                got_key = true;
+                            }
+                        }
+                        KeyEvent {
+                            code: KeyCode::Char(ch),
+                            ..
+                        } => {
+                            let upper: String = ch.to_uppercase().collect();
+                            emu.bus.serial().type_text(&upper);
+                            got_key = true;
+                        }
+                        KeyEvent {
+                            code: KeyCode::Enter,
+                            ..
+                        } => {
+                            emu.bus.serial().type_text("\r");
+                            got_key = true;
+                        }
+                        KeyEvent {
+                            code: KeyCode::Backspace,
+                            ..
+                        } => {
+                            emu.bus.serial().type_text("\x7F");
+                            got_key = true;
+                        }
+                        KeyEvent {
+                            code: KeyCode::Tab, ..
+                        } => {
+                            emu.bus.serial().type_text("\t");
+                            got_key = true;
+                        }
+                        _ => {}
+                    },
                     Event::Resize(_, _) => {
                         last_display.clear();
                     }
@@ -408,3 +520,4 @@ pub fn run_terminal(emu: &mut rust_imsai_emulator::Imsai8080) {
         }
     }
 }
+

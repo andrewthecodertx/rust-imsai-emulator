@@ -1,4 +1,3 @@
-
 use crate::chips::Uart8251;
 use crate::io::Keyboard;
 use crate::io::VideoDisplay;
@@ -107,7 +106,9 @@ impl SerialCard {
 }
 
 impl Default for SerialCard {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl SerialCard {
@@ -141,9 +142,13 @@ impl SerialCard {
         matches!(port, 0x00..=0x03 | 0x79 | 0x7B)
     }
 
-    pub fn owns_address(&self, _addr: u16) -> bool { false }
+    pub fn owns_address(&self, _addr: u16) -> bool {
+        false
+    }
 
-    pub fn name(&self) -> &'static str { "SIO-2 Serial" }
+    pub fn name(&self) -> &'static str {
+        "SIO-2 Serial"
+    }
 }
 
 #[cfg(test)]
@@ -246,3 +251,4 @@ mod tests {
         assert_eq!(card.io_read(0x48), 0xFF);
     }
 }
+

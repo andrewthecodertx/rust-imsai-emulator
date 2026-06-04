@@ -1,6 +1,5 @@
-
-use intel8080::Bus;
 use crate::cards::{MemoryCard, SerialCard, TarbellCard};
+use intel8080::Bus;
 
 /// S-100 backplane: MemoryCard + SerialCard + TarbellCard, no dynamic dispatch.
 pub struct ImsaiBus {
@@ -58,7 +57,9 @@ impl ImsaiBus {
 }
 
 impl Default for ImsaiBus {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 /// I/O port dispatch: 0x00-0x03+0x79/0x7B=Serial, 0x48-0x4B+0xF8-0xFF=Tarbell, else 0xFF.
@@ -93,3 +94,4 @@ impl Bus for ImsaiBus {
         }
     }
 }
+

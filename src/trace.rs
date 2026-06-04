@@ -1,9 +1,6 @@
-
-use std::time::Instant;
-
-use rust_imsai_emulator::Imsai8080;
-
 use crate::disasm;
+use rust_imsai_emulator::Imsai8080;
+use std::time::Instant;
 
 /// Print a hex dump of memory to stdout.
 pub fn dump_memory(emu: &Imsai8080, start: u16, len: usize, label: &str) {
@@ -119,7 +116,10 @@ pub fn run_diag(emu: &mut Imsai8080, max: u64) {
     println!("\n=== I/O LOG (first 50) ===");
     for (i, (cnt, port, val, is_out)) in io_log.iter().take(50).enumerate() {
         let dir = if *is_out { "OUT" } else { "IN " };
-        println!("{:5}: {:08} {:3} 0x{:02X} A=0x{:02X}", i, cnt, dir, port, val);
+        println!(
+            "{:5}: {:08} {:3} 0x{:02X} A=0x{:02X}",
+            i, cnt, dir, port, val
+        );
     }
     if io_log.len() > 50 {
         println!("  ... {} total I/O operations", io_log.len());
@@ -158,10 +158,14 @@ pub fn run_diag(emu: &mut Imsai8080, max: u64) {
 
 /// Full trace: run N instructions with no per-instruction output.
 pub fn run_trace(emu: &mut Imsai8080, max: u64) {
-    println!("Tracing {} instructions from PC=0x{:04X}...", max, emu.cpu.pc);
+    println!(
+        "Tracing {} instructions from PC=0x{:04X}...",
+        max, emu.cpu.pc
+    );
 
     if emu.panel.is_stopped() {
-        emu.panel.press_switch(rust_imsai_emulator::PanelSwitch::RunStop);
+        emu.panel
+            .press_switch(rust_imsai_emulator::PanelSwitch::RunStop);
         emu.process_panel();
     }
 
@@ -173,7 +177,10 @@ pub fn run_trace(emu: &mut Imsai8080, max: u64) {
             break;
         }
     }
-    println!("Stopped at PC=0x{:04X} after {} instructions", emu.cpu.pc, count);
+    println!(
+        "Stopped at PC=0x{:04X} after {} instructions",
+        emu.cpu.pc, count
+    );
     let display = emu.bus.console().video().get_display_string();
     println!("\nDisplay:\n{}", display);
 }
@@ -243,7 +250,13 @@ pub fn run_pc_trace(emu: &mut Imsai8080, max: u64) {
             io_log.push((count, port, a, false));
         }
 
-        let region = if pc < 0x0100 { 0u8 } else if pc < 0xC000 { 1 } else { 2 };
+        let region = if pc < 0x0100 {
+            0u8
+        } else if pc < 0xC000 {
+            1
+        } else {
+            2
+        };
         if region != last_region {
             transitions.push((count, pc, last_region, region));
             last_region = region;
@@ -313,9 +326,15 @@ pub fn run_pc_trace(emu: &mut Imsai8080, max: u64) {
         let dir = if *is_out { "OUT" } else { "IN " };
         let name = disasm::port_name(*port);
         if name.is_empty() {
-            println!("{:5}: {:08} {:3} 0x{:02X}       A=0x{:02X}", i, cnt, dir, port, val);
+            println!(
+                "{:5}: {:08} {:3} 0x{:02X}       A=0x{:02X}",
+                i, cnt, dir, port, val
+            );
         } else {
-            println!("{:5}: {:08} {:3} 0x{:02X} {:10} A=0x{:02X}", i, cnt, dir, port, name, val);
+            println!(
+                "{:5}: {:08} {:3} 0x{:02X} {:10} A=0x{:02X}",
+                i, cnt, dir, port, name, val
+            );
         }
     }
     if io_log.is_empty() {
@@ -331,16 +350,27 @@ pub fn run_pc_trace(emu: &mut Imsai8080, max: u64) {
     println!("\n=== FINAL STATE ===");
     println!(
         "PC=0x{:04X} SP=0x{:04x} A=0x{:02X} BC=0x{:02X}{:02X} DE=0x{:02X}{:02X} HL=0x{:02X}{:02X}",
-        emu.cpu.pc, emu.cpu.sp, emu.cpu.a,
-        emu.cpu.b, emu.cpu.c, emu.cpu.d, emu.cpu.e, emu.cpu.h, emu.cpu.l
+        emu.cpu.pc,
+        emu.cpu.sp,
+        emu.cpu.a,
+        emu.cpu.b,
+        emu.cpu.c,
+        emu.cpu.d,
+        emu.cpu.e,
+        emu.cpu.h,
+        emu.cpu.l
     );
     println!(
         "0x0000: {:02X} {:02X} {:02X}   (reset vector)",
-        emu.bus.mem_read(0), emu.bus.mem_read(1), emu.bus.mem_read(2)
+        emu.bus.mem_read(0),
+        emu.bus.mem_read(1),
+        emu.bus.mem_read(2)
     );
     println!(
         "0x0005: {:02X} {:02X} {:02X}   (CALL 5 vector)",
-        emu.bus.mem_read(5), emu.bus.mem_read(6), emu.bus.mem_read(7)
+        emu.bus.mem_read(5),
+        emu.bus.mem_read(6),
+        emu.bus.mem_read(7)
     );
 }
 
@@ -393,7 +423,8 @@ pub fn run_interactive(emu: &mut Imsai8080, max_instructions: u64) {
     println!("IMSAI 8080 ({} instructions)", max_instructions);
 
     if emu.panel.is_stopped() {
-        emu.panel.press_switch(rust_imsai_emulator::PanelSwitch::RunStop);
+        emu.panel
+            .press_switch(rust_imsai_emulator::PanelSwitch::RunStop);
         emu.process_panel();
     }
 
@@ -494,3 +525,4 @@ pub fn run_scripted(emu: &mut Imsai8080, cmd: Option<&str>, max_instructions: u6
     dump_memory_eprint(&emu, 0x0005, 3, "CALL 5 vector");
     dump_memory_eprint(&emu, 0x0100, 32, "TPA (0x0100)");
 }
+

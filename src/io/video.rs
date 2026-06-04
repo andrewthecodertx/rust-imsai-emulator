@@ -1,4 +1,3 @@
-
 use std::io::{self, Write};
 
 /// Video display controller for the IMSAI 8080
@@ -33,7 +32,6 @@ impl VideoDisplay {
 
         match ch {
             '\n' => {
-                
                 self.cursor_x = 0;
                 self.cursor_y += 1;
                 if self.cursor_y >= self.height {
@@ -42,28 +40,23 @@ impl VideoDisplay {
                 }
             }
             '\r' => {
-                
                 self.cursor_x = 0;
             }
             '\x08' => {
-                
                 if self.cursor_x > 0 {
                     self.cursor_x -= 1;
                     self.buffer[self.cursor_y][self.cursor_x] = ' ';
                 }
             }
             _ => {
-                
                 if self.cursor_x < self.width && self.cursor_y < self.height {
                     self.buffer[self.cursor_y][self.cursor_x] = ch;
                     self.cursor_x += 1;
 
-                    
                     if self.cursor_x >= self.width {
                         self.cursor_x = 0;
                         self.cursor_y += 1;
 
-                        
                         if self.cursor_y >= self.height {
                             self.scroll_up();
                             self.cursor_y = self.height - 1;
@@ -75,14 +68,12 @@ impl VideoDisplay {
     }
 
     fn scroll_up(&mut self) {
-        
         for y in 0..self.height - 1 {
             for x in 0..self.width {
                 self.buffer[y][x] = self.buffer[y + 1][x];
             }
         }
 
-        
         for x in 0..self.width {
             self.buffer[self.height - 1][x] = ' ';
         }
@@ -102,10 +93,9 @@ impl VideoDisplay {
         if !self.auto_render {
             return;
         }
-        
+
         print!("\x1B[H");
 
-        
         for y in 0..self.height {
             for x in 0..self.width {
                 print!("{}", self.buffer[y][x]);
@@ -113,7 +103,6 @@ impl VideoDisplay {
             println!();
         }
 
-        
         let _ = io::stdout().flush();
     }
 
