@@ -879,7 +879,7 @@ mod tests {
         let mut emu = crate::emulator::Imsai8080::new();
         let program: Vec<u8> = vec![
             0x3E, 0x01, // MVI A,01
-            0x0F,       // RRC  -> A=0x80
+            0x0F, // RRC  -> A=0x80
             0x3E, 0xFE, // MVI A,FE
             0xD3, 0xFF, // OUT FF  -> outputs A=0xFE
         ];
