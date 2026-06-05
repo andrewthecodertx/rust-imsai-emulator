@@ -962,12 +962,13 @@ fn main() {
         let tf = term_font.as_ref();
 
         // ---------------------------------------------------------------
-        // Row 1: PROGRAMMED OUTPUT (left byte block) -- not modeled, off.
+        // Row 1: PROGRAMMED OUTPUT (left byte block)
+        // Latched from the data bus on every OUT instruction.
         // ---------------------------------------------------------------
         for j in 0..8usize {
             let cx = byte_col_x(LBYTE_X0, j);
             ptext_c(&mut d, uf, &format!("{}", 7 - j), cx, Y_PROG - 28, 13, txt);
-            draw_led(&mut d, cx, Y_PROG, false, led_on, led_off, led_glow);
+            draw_led(&mut d, cx, Y_PROG, leds.programmed_output[j], led_on, led_off, led_glow);
         }
         ptext(&mut d, uf, "PROGRAMMED", PX + 332, Y_PROG - 15, 13, txt);
         ptext(&mut d, uf, "OUTPUT", PX + 332, Y_PROG + 1, 13, txt);
@@ -982,7 +983,7 @@ fn main() {
             ("OUT", leds.iow),
             ("HLTA", leds.hlta),
             ("STACK", false),
-            ("WO", leds.mwrt),
+            ("WO", !leds.mwrt),
             ("INTA", leds.int),
         ];
         for (j, (lbl, on)) in status.iter().enumerate() {

@@ -24,9 +24,15 @@ pub struct PanelLeds {
     pub hlda: bool,
     pub power: bool,
     pub memr: bool,
+    /// Memory write active. True during write cycles. The front panel LED is
+    /// !WO (active-low), so the GUI renders `!mwrt` — lit when NOT writing.
     pub mwrt: bool,
     pub ior: bool,
     pub iow: bool,
+    /// Programmed output: latched from the data bus on every OUT instruction.
+    /// On real IMSAI hardware, the front panel has an 8-bit latch that captures
+    /// whatever byte the CPU writes during any OUT instruction.
+    pub programmed_output: [bool; 8],
 }
 
 /// CPU run state controlled by the front panel.
@@ -214,6 +220,13 @@ impl FrontPanel {
         self.leds.iow = true;
         self.leds.ior = false;
         self.leds.mwrt = false;
+        // Latch the data bus value into the programmed output LEDs.
+        // On real IMSAI hardware, the programmed output LEDs are active-low:
+        // a 0 bit lights the LED, a 1 bit extinguishes it. We invert here so
+        // that `programmed_output[j] = true` always means "LED on", consistent
+        // with all other LEDs in PanelLeds.
+        let inverted = !value;
+        self.leds.programmed_output = u8_to_bool_array(inverted);
 
         if self.io_log.len() >= self.io_log_capacity {
             self.io_log.pop_front();
@@ -272,6 +285,11 @@ impl FrontPanel {
                 // Every instruction begins with an M1 (opcode fetch) memory read.
                 self.leds.m1 = true;
                 self.leds.memr = true;
+                // !WO (write-output-bar) is active-low on real hardware: it is
+                // lit when the CPU is NOT writing. Most instructions end with
+                // a read cycle, so the default state is lit.
+                // mwrt=false means "not writing" → WO-bar is ON in the GUI.
+                self.leds.mwrt = false;
             }
         }
     }
@@ -829,5 +847,54 @@ mod tests {
 
         panel.log_io_read(500, 0x01, 0x00);
         assert_eq!(panel.cycle_count(), 500);
+    }
+
+    #[test]
+    fn test_programmed_output_latches_on_io_write() {
+        let mut panel = FrontPanel::new();
+        // Programmed output LEDs start all-off at power-on.
+        assert_eq!(bool_array_to_u8(panel.leds().programmed_output), 0x00);
+
+        // OUT with value 0xFE (1111_1110): bit 0 is 0 (active-low = ON),
+        // so programmed_output bit 0 should be lit (true) and the rest off.
+        // Inverted: !0xFE = 0x01 = 0000_0001.
+        panel.log_io_write(100, 0xFF, 0xFE);
+        assert_eq!(bool_array_to_u8(panel.leds().programmed_output), 0x01);
+
+        // OUT with value 0x3E (0011_1110): inverted = 0xC1.
+        panel.log_io_write(200, 0x00, 0x3E);
+        assert_eq!(bool_array_to_u8(panel.leds().programmed_output), 0xC1);
+
+        // An I/O read should NOT update programmed output.
+        panel.log_io_read(300, 0x01, 0xAB);
+        assert_eq!(bool_array_to_u8(panel.leds().programmed_output), 0xC1);
+    }
+
+    #[test]
+    fn test_programmed_output_counter_program() {
+        // Load the counter program and verify programmed output LEDs update.
+        // Counter program: MVI A,01 / RRC / MVI A,FE / OUT FF / ...
+        // OUT FF outputs 0xFE = 1111_1110. Active-low inversion: !0xFE = 0x01.
+        // So only bit 0 (D0) LED should be lit.
+        let mut emu = crate::emulator::Imsai8080::new();
+        let program: Vec<u8> = vec![
+            0x3E, 0x01, // MVI A,01
+            0x0F,       // RRC  -> A=0x80
+            0x3E, 0xFE, // MVI A,FE
+            0xD3, 0xFF, // OUT FF  -> outputs A=0xFE
+        ];
+        emu.load_program(0x0000, &program);
+        emu.panel.set_address_switches(0x0000);
+        emu.panel.press_switch(crate::cards::PanelSwitch::RunStop);
+        emu.process_panel();
+
+        // Run enough instructions to reach the OUT FF.
+        emu.run_batch(10);
+        // After OUT FF with value 0xFE, inverted = 0x01.
+        assert_eq!(
+            bool_array_to_u8(emu.panel.leds().programmed_output),
+            0x01,
+            "programmed output should show !0xFE = 0x01 after OUT FF"
+        );
     }
 }
