@@ -1,7 +1,7 @@
 /.enchanter/
 /target
 /disk_images/
-/.github/
+
 *.backup
 imsai_memory.json
 CLAUDE.md
