@@ -16,7 +16,7 @@ Emulates the IMSAI 8080 hardware: Intel 8080 CPU, 64KB RAM, Tarbell FD1771 flopp
 
 ## Hardware Emulated
 
-- Intel 8080 CPU ([rust-intel8080-emulator](https://github.com/andrewthecodertx/rust-intel8080-emulator))
+- Intel 8080 CPU ([rust-intel8080-emulator](https://github.com/andrewthecodertx/rust-intel8080-emulator), [instruction set reference](https://www.paulf.demon.nl/8080/))
 - 64KB RAM (0xFF on power-up, matching floating bus behavior)
 - Tarbell 1011 floppy disk controller (FD1771, 8" SSSD, ports 0x48-0x4B)
 - IMSAI SIO-2 dual serial board (2x Intel 8251A UART, ports 0x00-0x03)
