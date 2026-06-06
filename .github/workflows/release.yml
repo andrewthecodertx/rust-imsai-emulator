@@ -61,14 +61,21 @@ jobs:
         if: runner.os != 'Windows'
         run: |
           cd target/${{ matrix.target }}/release
-          tar czf ../../../imsai-8080-emulator-${{ matrix.target }}.tar.gz imsai-cli imsai-gui
+          mkdir -p ../../../staging
+          cp imsai-cli imsai-gui ../../../staging/
+          cp -r ${{ github.workspace }}/programs ${{ github.workspace }}/binaries ${{ github.workspace }}/disks ../../../staging/
+          cd ../../../staging
+          tar czf ${{ github.workspace }}/imsai-8080-emulator-${{ matrix.target }}.tar.gz imsai-cli imsai-gui programs binaries disks
 
       - name: Package archive (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          cd target/${{ matrix.target }}/release
-          Compress-Archive -Path imsai-cli.exe, imsai-gui.exe -DestinationPath ..\..\..\imsai-8080-emulator-${{ matrix.target }}.zip
+          cd target\${{ matrix.target }}\release
+          New-Item -ItemType Directory -Force -Path ..\..\..\staging
+          Copy-Item imsai-cli.exe, imsai-gui.exe ..\..\..\staging\
+          Copy-Item -Recurse ${{ github.workspace }}\programs, ${{ github.workspace }}\binaries, ${{ github.workspace }}\disks ..\..\..\staging\
+          Compress-Archive -Path ..\..\..\staging\imsai-cli.exe, ..\..\..\staging\imsai-gui.exe, ..\..\..\staging\programs, ..\..\..\staging\binaries, ..\..\..\staging\disks -DestinationPath ..\..\..\imsai-8080-emulator-${{ matrix.target }}.zip
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

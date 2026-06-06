@@ -1,11 +1,11 @@
 {
-  "name": "Counter",
-  "description": "counts forever on the front panel",
+  "name": "Slider",
+  "description": "A single dark LED walks across the programmed output (port FFh), cycling endlessly.",
   "steps": [
     {
       "action": "load",
       "address": "0000",
-      "data": "3e 01 0f 3e fe d3 ff 11 01 00 21 00 00 19 d2 0d 00 07 c3 05 00"
+      "data": "3E 01 0F 3E FE D3 FF 11 01 00 21 00 00 19 D2 0D 00 07 C3 05 00"
     }
   ]
 }

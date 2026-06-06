@@ -1,6 +1,6 @@
 [package]
 name = "rust-imsai-emulator"
-version = "0.9.1"
+version = "0.9.2"
 edition = "2021"
 # Two binaries (imsai-cli, imsai-gui). Without this, a bare `cargo run`
 # errors with "could not determine which binary to run". Default to the
