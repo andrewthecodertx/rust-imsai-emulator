@@ -57,28 +57,24 @@ jobs:
           strip target/${{ matrix.target }}/release/imsai-cli
           strip target/${{ matrix.target }}/release/imsai-gui
 
-      - name: Package binaries (Linux/macOS)
+      - name: Package archive (Linux/macOS)
         if: runner.os != 'Windows'
         run: |
           cd target/${{ matrix.target }}/release
-          tar czf ../../../imsai-cli-${{ matrix.target }}.tar.gz imsai-cli
-          tar czf ../../../imsai-gui-${{ matrix.target }}.tar.gz imsai-gui
+          tar czf ../../../imsai-8080-emulator-${{ matrix.target }}.tar.gz imsai-cli imsai-gui
 
-      - name: Package binaries (Windows)
+      - name: Package archive (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           cd target/${{ matrix.target }}/release
-          Compress-Archive -Path imsai-cli.exe -DestinationPath ..\..\..\imsai-cli-${{ matrix.target }}.zip
-          Compress-Archive -Path imsai-gui.exe -DestinationPath ..\..\..\imsai-gui-${{ matrix.target }}.zip
+          Compress-Archive -Path imsai-cli.exe, imsai-gui.exe -DestinationPath ..\..\..\imsai-8080-emulator-${{ matrix.target }}.zip
 
-      - name: Upload artifacts
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.target }}
-          path: |
-            imsai-cli-${{ matrix.target }}.*
-            imsai-gui-${{ matrix.target }}.*
+          path: imsai-8080-emulator-${{ matrix.target }}.*
 
   release:
     name: Create GitHub Release
