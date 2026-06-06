@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+echo "==> Running cargo fmt --check"
+if ! cargo fmt --check; then
+  echo ""
+  echo "Format check failed. Run 'cargo fmt' and stage the changes."
+  exit 1
+fi
+
+echo "==> Running cargo test"
+if ! cargo test; then
+  echo ""
+  echo "Tests failed. Fix before committing."
+  exit 1
+fi
+
+echo "==> All pre-commit checks passed."
