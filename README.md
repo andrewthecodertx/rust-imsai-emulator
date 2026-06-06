@@ -4,11 +4,15 @@ A Rust emulator for the IMSAI 8080 with a Tarbell FD1771 floppy controller and r
 
 ![IMSAI 8080 front panel](docs/imsai-screenshot.png)
 
+## Downloads
+
+Pre-built binaries for Linux, macOS, and Windows are available on the [releases page](https://github.com/andrewthecodertx/rust-imsai-emulator/releases/latest). Each archive contains both `imsai-cli` (terminal mode) and `imsai-gui` (front panel).
+
 ## What It Does
 
 Emulates the IMSAI 8080 hardware: Intel 8080 CPU, 64KB RAM, Tarbell FD1771 floppy disk controller, and IMSAI SIO-2 dual serial board. Supports interactive terminal mode (CLI) and a visual front panel GUI.
 
-**Current status**: Boots and runs programs loaded via `--binary` or `--program`. Terminal mode provides interactive keyboard input and console output. Disk images can be mounted and the FD1771 controller is modeled, but there is no disk boot loader yet.
+**Current status**: Boots and runs programs loaded via `--load` or `--program`. Terminal mode provides interactive keyboard input and console output. Disk images can be mounted and the FD1771 controller is modeled, but there is no disk boot loader yet.
 
 ## Hardware Emulated
 
@@ -36,8 +40,7 @@ Memory state is automatically saved to `imsai_memory.json` on exit and restored 
 | Flag                       | Description                                      |
 | -------------------------- | ------------------------------------------------ |
 | (none)                     | Start with empty memory, STOPPED                 |
-| `--bare`                   | Same as default (kept for compatibility)         |
-| `--binary <file> [0xADDR]` | Load raw binary file at address (default 0x0000) |
+| `--load <file> [0xADDR]`  | Load raw binary file at address (default 0x0000) |
 | `--disk <file>`            | Mount disk image in drive A                      |
 | `--program <file>`         | Load and execute a front panel program (.json)   |
 
@@ -100,6 +103,10 @@ cargo run --features gui --bin imsai-gui -- --program programs/hello-world.json
 ### Terminal Mode (CLI)
 
 ```bash
+# From a release binary
+./imsai-cli --program programs/hello-world.json
+
+# From source
 cargo run --bin imsai-cli -- --program programs/hello-world.json
 ```
 
@@ -109,13 +116,12 @@ Interactive terminal mode with keyboard input and live console output. Memory st
 imsai-cli [OPTIONS]
 
 Mode (choose one):
-  --binary <file> [addr]       Load raw binary at address (default 0x0000)
+  --load <file> [addr]       Load raw binary at address (default 0x0000)
   --program <file.json>      Load a front panel program (.json)
   (no arguments)             Start with saved memory (or empty if first run)
 
 Options:
   --disk <file>              Mount disk image in drive A
-  (default)                  Interactive terminal mode with keyboard input
   --batch, -b                Batch mode (non-interactive, 50M instructions)
   --trace, -t                Trace every instruction
   --vtrace, -v               Verbose trace (with I/O logging)
@@ -125,6 +131,7 @@ Options:
   --script                   Scripted mode (captures console output)
   --cmd "text"               Pre-load keyboard input for scripted testing
   --speed <mhz>              Throttle the TUI to a target clock (default: host speed)
+  --help, -h                 Show this help
 ```
 
 ## Terminal Controls
@@ -141,6 +148,16 @@ Options:
 | Ctrl+K    | Command mode (load, program, mount, go/run, reset, quit, help) |
 | Ctrl+D    | Exit emulator                                                  |
 
+## Building from Source
+
+Requires Rust 1.80+ and the raylib development libraries (for the GUI).
+
+| Platform       | Install                                            |
+| -------------- | -------------------------------------------------- |
+| Ubuntu/Debian  | `sudo apt install libraylib-dev`                   |
+| Arch Linux     | `sudo pacman -S raylib`                            |
+| macOS          | `brew install raylib`                              |
+
 ## Known Limitations
 
 - Only 8" SSSD floppy format (77 tracks, 26 sectors, 128 bytes/sector)
@@ -155,4 +172,3 @@ MIT, see [LICENSE](LICENSE).
 ## Contributing
 
 PRs welcome. Please open an issue first for major changes.
-
