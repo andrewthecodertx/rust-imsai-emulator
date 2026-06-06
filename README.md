@@ -50,14 +50,14 @@ Programs are JSON files describing sequences of switch positions and button pres
 
 ```json
 {
-  "name": "UART Test",
-  "description": "Prints 'A' continuously to the UART",
+  "name": "Counter",
+  "description": "counts forever on the front panel",
   "steps": [
-    { "action": "deposit", "address": "0000", "data": "3E" },
-    { "action": "deposit_next", "data": "4E" },
-    { "action": "deposit_next", "data": "D3" },
-    { "action": "deposit_next", "data": "01" },
-    { "action": "run", "address": "0000" }
+    {
+      "action": "load",
+      "address": "0000",
+      "data": "3e 01 0f 3e fe d3 ff 11 01 00 21 00 00 19 d2 0d 00 07 c3 05 00"
+    }
   ]
 }
 ```
@@ -66,14 +66,14 @@ Step types:
 
 | Action         | Fields            | Effect                                                   |
 | -------------- | ----------------- | -------------------------------------------------------- |
+| `load`         | `address`, `data` | Load hex bytes directly into memory (recommended)        |
 | `deposit`      | `address`, `data` | Set address and data switches, press DEPOSIT             |
 | `deposit_next` | `data`            | Set data switches, press DEPOSIT NEXT (auto-advances)    |
 | `examine`      | `address`         | Set address switches, press EXAMINE                      |
 | `examine_next` | (none)            | Press EXAMINE NEXT (auto-advances)                       |
 | `run`          | `address`         | Set address switches, press RUN/STOP                     |
-| `load`         | `address`, `data` | Load hex bytes directly into memory (no switch toggling) |
 
-The `load` action is a shortcut that writes bytes via `load_program()` instead of toggling each byte through the front panel. Use it for longer programs. The other actions operate the front panel interface exactly as a human would.
+The `load` action writes bytes directly into memory without toggling switches — use it for everything. The other actions operate the front panel interface exactly as a human would, which is useful for testing hardware-level interactions.
 
 ```bash
 # Run the UART test program
