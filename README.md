@@ -20,6 +20,7 @@ Emulates the IMSAI 8080 hardware: Intel 8080 CPU, 64KB RAM, Tarbell FD1771 flopp
 - 64KB RAM (0xFF on power-up, matching floating bus behavior)
 - Tarbell 1011 floppy disk controller (FD1771, 8" SSSD, ports 0x48-0x4B)
 - IMSAI SIO-2 dual serial board (2x Intel 8251A UART, ports 0x00-0x03)
+- 80x24 CRT video display (Channel A UART output)
 - IMSAI 8080 front panel (toggle switches, LEDs, function buttons)
 - S-100 bus connecting all components
 
@@ -84,6 +85,20 @@ OUT  0x01      ;
 MVI A, 0x05    ; command: enable TX and RX
 OUT  0x01      ;
 ```
+
+### Video Display (80x24 CRT Terminal)
+
+Characters written to UART Channel A (OUT port 0x00) appear on the video display. The display is an 80-column by 24-row CRT terminal — it is the output side of the console UART, not a separate I/O device.
+
+| Feature | Value |
+| ------- | ----- |
+| Columns | 80 |
+| Rows | 24 |
+| Input | Channel A TX output (port 0x00 writes) |
+| Control characters | CR (0x0D), LF (0x0A), BS (0x08) |
+| Scrolling | Automatic when cursor passes the last row |
+
+The display supports CR (carriage return), LF (line feed), and BS (backspace). Lines wrap at column 80 and scroll the screen up when the cursor passes row 24. No escape sequences or cursor addressing are supported.
 
 ### Floppy Controller (WD FD1771)
 
