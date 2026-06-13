@@ -10,7 +10,7 @@ Pre-built binaries for Linux, macOS, and Windows are available on the [releases 
 
 ## What It Does
 
-Emulates the IMSAI 8080 hardware: Intel 8080 CPU, 64KB RAM, Tarbell FD1771 floppy disk controller, and IMSAI SIO-2 dual serial board. Supports interactive terminal mode (CLI) and a visual front panel GUI.
+Emulates the IMSAI 8080 hardware: Intel 8080 CPU, 64KB RAM, Tarbell FD1771 floppy disk controller, and IMSAI SIO-2 dual serial board. Supports interactive terminal mode (CLI) and a visual front panel GUI with a live hex memory editor.
 
 **Current status**: Boots and runs programs loaded via `--load` or `--program`. Terminal mode provides interactive keyboard input and console output. Disk images can be mounted and the FD1771 controller is modeled, but there is no disk boot loader yet.
 
@@ -222,34 +222,37 @@ cargo run --features gui --bin imsai-gui -- --program programs/hello-world.json
 | EXAMINE button                  | Read byte at address switches into data LEDs          |
 | DEPOSIT button                  | Write data switches into memory at address switches   |
 | EX NXT / DEP NXT                | Increment address then examine/deposit                |
-| F2                              | Open program loader (pick a `.json` from `programs/`) |
-| F3                              | Save current memory region as a front panel program   |
+| F2                              | Load program into memory (pick a `.json` from `programs/`) |
+| F3                              | Save 256 bytes from editor base address as `.json`     |
 | F4                              | Mount a disk image in drive A                         |
-| F6                              | Toggle between CONSOLE and CODE editor tabs          |
+| F6                              | Toggle CONSOLE / memory editor (CODE tab)             |
 | R key                           | Cold reset (clear RAM, delete `imsai_memory.json`)    |
 | Keyboard (when running)         | Send characters to console UART                       |
 
-### Code Editor (F6)
+### Memory Editor (F6)
 
-The CODE tab in the CRT terminal area provides a hex code editor for typing programs directly instead of toggling front panel switches.
+The CODE tab in the CRT terminal area is a live hex memory viewer and editor — it reads directly from RAM and writes changes back immediately. There is no separate text buffer; memory is the source of truth.
 
-- **Address field**: 4-digit hex address where the program loads. Tab switches focus between address and hex body.
-- **Hex body**: Type space-separated hex bytes (e.g., `3E 41 D3 00 C3 08 00`). Spaces are auto-inserted after every two hex digits.
-- **F2** loads a `.json` program file into the editor (instead of running it).
-- **F3** saves the editor contents as a `.json` program file.
-- **Ctrl+Enter** loads the hex bytes into memory at the specified address and starts execution (switches to CONSOLE to show output).
+- **Address field**: 4-digit hex start address for the view. Tab switches focus between address field and hex body. Enter also moves focus to hex.
+- **Hex dump**: Shows address, hex bytes, and ASCII side-by-side. Each byte is two nibbles (high, low). Typing a hex digit modifies the nibble under the cursor and writes to memory immediately.
+- **Read-only while running**: When the CPU is executing, the editor is read-only (scroll only). This prevents accidentally modifying memory while a program runs. Navigation keys still work.
+- **F2** loads a `.json` program file into memory (writes bytes, points editor at start address).
+- **F3** saves 256 bytes starting at the editor's base address as a `.json` program file.
+- **Ctrl+Enter** sets PC to the cursor address and starts execution (switches to CONSOLE to show output). Only works while stopped.
 
 | Key             | Action                                            |
 | --------------- | ------------------------------------------------- |
 | F6              | Toggle CONSOLE / CODE tabs                        |
-| Tab             | Switch focus: address field ↔ hex body            |
-| Ctrl+Enter      | Load hex into memory and run                      |
-| F2              | Load `.json` program into editor                  |
-| F3              | Save editor contents as `.json` program           |
-| 0-9, A-F       | Type hex digits (auto-space after byte boundary)  |
-| Backspace       | Delete previous character                          |
-| Left/Right      | Move cursor through hex text                      |
-| Home/End        | Jump to start/end of hex text                     |
+| Tab             | Switch focus: address field / hex body            |
+| Enter           | Move focus from address field to hex body          |
+| Ctrl+Enter      | Run from cursor address (when stopped)            |
+| F2              | Load `.json` program into memory                  |
+| F3              | Save 256 bytes from base address as `.json`       |
+| 0-9, A-F       | Write hex nibble to memory (when stopped)          |
+| Left/Right      | Move cursor between nibbles/bytes                 |
+| Up/Down         | Move cursor between lines                         |
+| Home/End        | Jump to start/end of current line                 |
+| Page Up/Down    | Scroll by ~10 lines                               |
 
 ### Terminal Mode (CLI)
 
