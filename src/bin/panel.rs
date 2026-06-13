@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use rust_imsai_emulator::{
     execute_panel_program, find_program_start, load_program_file, memory_to_program, parse_hex16,
-    parse_hex_bytes, save_program_file,
+    save_program_file,
 };
 
 /// Which view occupies the CRT terminal area.
@@ -15,27 +15,33 @@ enum CrtTab {
     Code,
 }
 
-/// State for the hex code editor panel.
+/// State for the hex memory editor panel.
+///
+/// The editor is a live lens onto the emulator's 64K RAM. It reads memory
+/// directly for display and writes directly on keystrokes — no intermediate
+/// text buffer. The cursor operates on byte addresses, not on a string.
 #[derive(Debug)]
 struct EditorState {
-    /// Hex text buffer (space-separated hex bytes, e.g. "3E 41 D3 00").
-    hex_text: String,
-    /// Load address as hex string (e.g. "0000").
+    /// Top-left address currently displayed (hex string, e.g. "0100").
     addr_text: String,
-    /// Program name loaded from file, or empty if unsaved/new.
+    /// Parsed base address (kept in sync with addr_text).
+    base_addr: u16,
+    /// Byte offset from base_addr where the cursor sits.
+    cursor_offset: u16,
+    /// Which nibble of the current byte the cursor is on: 0=high, 1=low.
+    nibble: u8,
+    /// Vertical scroll offset in display lines (each line = 16 bytes).
+    scroll: usize,
+    /// Program name (from loaded file or saved).
     program_name: String,
     /// Source path if loaded from a file.
     source_path: Option<PathBuf>,
-    /// Cursor position within hex_text (byte offset).
-    cursor: usize,
-    /// Vertical scroll in lines.
-    scroll: usize,
-    /// Whether the editor has unsaved changes.
-    dirty: bool,
     /// Currently focused field: address or hex body.
     focus: EditorFocus,
     /// Blink timer for cursor (frames).
     cursor_blink: i32,
+    /// Number of hex bytes that fit on one display line (computed at draw time).
+    bytes_per_line: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -47,87 +53,57 @@ enum EditorFocus {
 impl Default for EditorState {
     fn default() -> Self {
         Self {
-            hex_text: String::new(),
             addr_text: "0000".to_string(),
+            base_addr: 0,
+            cursor_offset: 0,
+            nibble: 0,
+            scroll: 0,
             program_name: String::new(),
             source_path: None,
-            cursor: 0,
-            scroll: 0,
-            dirty: false,
             focus: EditorFocus::Hex,
             cursor_blink: 0,
+            bytes_per_line: 16,
         }
     }
 }
 
 impl EditorState {
-    /// Parse the current hex text into bytes. Returns error message on failure.
-    fn to_bytes(&self) -> Result<Vec<u8>, String> {
-        if self.hex_text.trim().is_empty() {
-            return Err("No hex data entered".to_string());
-        }
-        parse_hex_bytes(&self.hex_text)
-    }
-
-    /// Parse the address field.
-    fn to_address(&self) -> Result<u16, String> {
+    /// Parse the address field into a u16.
+    fn parse_address(&self) -> Result<u16, String> {
         parse_hex16(&self.addr_text)
     }
 
-    /// Build a PanelProgram from the current editor contents.
-    fn to_program(&self) -> Result<rust_imsai_emulator::PanelProgram, String> {
-        let addr = self.to_address()?;
-        let bytes = self.to_bytes()?;
-        let data_str: String = bytes
-            .iter()
-            .map(|b| format!("{:02X}", b))
-            .collect::<Vec<_>>()
-            .join(" ");
-        let name = if self.program_name.is_empty() {
-            format!("code_{:04X}", addr)
-        } else {
-            self.program_name.clone()
-        };
-        Ok(rust_imsai_emulator::PanelProgram {
-            name,
-            description: format!("Code editor program, {} bytes at {:04X}", bytes.len(), addr),
-            steps: vec![
-                rust_imsai_emulator::PanelStep::Load {
-                    address: format!("{:04X}", addr),
-                    data: data_str,
-                },
-                rust_imsai_emulator::PanelStep::Run {
-                    address: format!("{:04X}", addr),
-                },
-            ],
-        })
+    /// Sync base_addr from addr_text. Call after the address field changes.
+    fn sync_address(&mut self) {
+        if let Ok(addr) = self.parse_address() {
+            self.base_addr = addr;
+        }
     }
 
-    /// Load a program file into the editor, populating the hex text.
-    fn load_from_program(&mut self, prog: &rust_imsai_emulator::PanelProgram, path: &Path) {
-        self.hex_text.clear();
-        self.addr_text = "0000".to_string();
-        self.program_name = prog.name.clone();
-        self.source_path = Some(path.to_path_buf());
-        self.dirty = false;
-        self.cursor = 0;
-        self.scroll = 0;
+    /// The absolute address the cursor is on.
+    fn cursor_addr(&self) -> u16 {
+        self.base_addr.wrapping_add(self.cursor_offset)
+    }
 
-        for step in &prog.steps {
-            match step {
-                rust_imsai_emulator::PanelStep::Load { address, data } => {
-                    self.addr_text = address.clone();
-                    if !self.hex_text.is_empty() {
-                        self.hex_text.push(' ');
-                    }
-                    self.hex_text.push_str(data);
-                }
-                rust_imsai_emulator::PanelStep::Run { address } => {
-                    self.addr_text = address.clone();
-                }
-                _ => {}
-            }
-        }
+    /// Move cursor to an absolute address, adjusting scroll to keep it visible.
+    fn goto(&mut self, addr: u16) {
+        // Snap base_addr so the target line is visible.
+        let bpl = self.bytes_per_line.max(1) as u16;
+        let line_of = addr / bpl;
+        let top_line = self.scroll as u16;
+        let visible = 20; // approximate visible lines
+        let target_top = if line_of < top_line {
+            line_of
+        } else if line_of >= top_line + visible {
+            line_of - visible + 1
+        } else {
+            top_line
+        };
+        self.base_addr = target_top * bpl;
+        self.addr_text = format!("{:04X}", self.base_addr);
+        self.cursor_offset = addr.wrapping_sub(self.base_addr);
+        self.scroll = target_top as usize;
+        self.nibble = 0;
     }
 }
 
@@ -774,14 +750,20 @@ fn main() {
                     match load_program_file(&path) {
                         Ok(prog) => {
                             if crt_tab == CrtTab::Code {
-                                // Load into editor instead of running
-                                editor.load_from_program(&prog, &path);
-                                status_msg = format!(
-                                    "Editor: {} ({} bytes)",
-                                    prog.name,
-                                    editor.hex_text.split_whitespace().count()
-                                );
-                                status_msg_timer = 180;
+                                // Execute the program into memory (writes bytes),
+                                // then point the editor at the start address.
+                                if let Err(e) = execute_panel_program(&mut emu, &prog) {
+                                    status_msg = format!("Load error: {}", e);
+                                    status_msg_timer = 180;
+                                } else {
+                                    editor.program_name = prog.name.clone();
+                                    editor.source_path = Some(path.clone());
+                                    if let Some(start_addr) = find_program_start(&prog) {
+                                        editor.goto(start_addr);
+                                    }
+                                    status_msg = format!("Loaded: {}", prog.name);
+                                    status_msg_timer = 180;
+                                }
                             } else {
                                 eprintln!(
                                     "Loaded: {} (PC=0x{:04X}, running={})",
@@ -840,30 +822,24 @@ fn main() {
                 }
                 PickerAction::Save(filename) => {
                     if crt_tab == CrtTab::Code {
-                        // Save from the code editor
-                        match editor.to_program() {
-                            Ok(prog) => {
-                                if fs::create_dir_all(default_programs_dir()).is_ok() {
-                                    let save_path =
-                                        default_programs_dir().join(format!("{}.json", filename));
-                                    match save_program_file(&prog, &save_path) {
-                                        Ok(()) => {
-                                            editor.program_name = prog.name.clone();
-                                            editor.source_path = Some(save_path.clone());
-                                            editor.dirty = false;
-                                            status_msg = format!("Saved: {}", save_path.display());
-                                            status_msg_timer = 180;
-                                        }
-                                        Err(e) => {
-                                            status_msg = format!("Save error: {}", e);
-                                            status_msg_timer = 180;
-                                        }
-                                    }
+                        // Save from memory: dump 256 bytes starting at editor's base address
+                        let start = editor.base_addr;
+                        let dump_len: u16 = 256;
+                        let prog = memory_to_program(&emu, start, dump_len);
+                        if fs::create_dir_all(default_programs_dir()).is_ok() {
+                            let save_path =
+                                default_programs_dir().join(format!("{}.json", filename));
+                            match save_program_file(&prog, &save_path) {
+                                Ok(()) => {
+                                    editor.program_name = prog.name.clone();
+                                    editor.source_path = Some(save_path.clone());
+                                    status_msg = format!("Saved: {}", save_path.display());
+                                    status_msg_timer = 180;
                                 }
-                            }
-                            Err(e) => {
-                                status_msg = format!("Save error: {}", e);
-                                status_msg_timer = 180;
+                                Err(e) => {
+                                    status_msg = format!("Save error: {}", e);
+                                    status_msg_timer = 180;
+                                }
                             }
                         }
                     } else {
@@ -923,16 +899,52 @@ fn main() {
         }
 
         // F6: Toggle between CONSOLE and CODE tabs in the CRT area.
+        // When switching to CODE, sync the editor to the front panel's current address.
         if matches!(picker, PickerState::Closed) && rl.is_key_pressed(KeyboardKey::KEY_F6) {
-            crt_tab = if crt_tab == CrtTab::Console {
-                CrtTab::Code
+            if crt_tab == CrtTab::Console {
+                crt_tab = CrtTab::Code;
+                // Sync editor address to the panel's currently latched address
+                let panel_addr = emu.panel.address_switches();
+                editor.goto(panel_addr);
             } else {
-                CrtTab::Console
-            };
+                crt_tab = CrtTab::Console;
+            }
         }
 
-        // === Code Editor Input ===
-        // Only when the CODE tab is active, picker is closed, and CPU is stopped.
+        // Tab header click handling (common to both tabs).
+        if matches!(picker, PickerState::Closed)
+            && rl.is_mouse_button_pressed(MouseButton::MOUSE_BUTTON_LEFT)
+        {
+            let m = mouse_layout;
+            let term_y_click: i32 = panel_bottom + 10;
+            let tab_h_click: i32 = 22;
+            let term_x_click: i32 = 8;
+            let tab_names = ["CONSOLE", "CODE"];
+            for (i, _) in tab_names.iter().enumerate() {
+                let tab_x = term_x_click + i as i32 * 100;
+                if m.x >= tab_x as f32
+                    && m.x < (tab_x + 96) as f32
+                    && m.y >= term_y_click as f32
+                    && m.y < (term_y_click + tab_h_click) as f32
+                {
+                    let new_tab = if i == 0 {
+                        CrtTab::Console
+                    } else {
+                        CrtTab::Code
+                    };
+                    if new_tab == CrtTab::Code && crt_tab != CrtTab::Code {
+                        // Sync editor address to the panel's currently latched address
+                        let panel_addr = emu.panel.address_switches();
+                        editor.goto(panel_addr);
+                    }
+                    crt_tab = new_tab;
+                }
+            }
+        }
+
+        // === Memory Editor Input ===
+        // The editor is always active when the CODE tab is shown.
+        // Editing (typing hex) is suppressed while the CPU is running.
         if crt_tab == CrtTab::Code && matches!(picker, PickerState::Closed) {
             editor.cursor_blink += 1;
 
@@ -945,15 +957,19 @@ fn main() {
                 };
             }
 
+            let cpu_stopped = emu.panel.is_stopped() || emu.cpu.halted;
+
             match editor.focus {
                 EditorFocus::Address => {
                     if rl.is_key_pressed(KeyboardKey::KEY_BACKSPACE) {
                         editor.addr_text.pop();
+                        editor.sync_address();
                     }
                     while let Some(ch) = rl.get_char_pressed() {
                         let lower = ch.to_ascii_lowercase();
                         if lower.is_ascii_hexdigit() && editor.addr_text.len() < 4 {
                             editor.addr_text.push(lower);
+                            editor.sync_address();
                         }
                     }
                     // Enter moves focus to hex body
@@ -962,130 +978,118 @@ fn main() {
                     }
                 }
                 EditorFocus::Hex => {
-                    if rl.is_key_pressed(KeyboardKey::KEY_BACKSPACE) {
-                        // Delete backward; remove trailing space if at a boundary
-                        if editor.cursor > 0 {
-                            if editor.cursor <= editor.hex_text.len() {
-                                // If the char before cursor is a space and the one before that
-                                // is a hex digit, remove the space too (clean up word boundary)
-                                let before = &editor.hex_text[..editor.cursor];
-                                if before.ends_with(' ') && editor.cursor >= 2 {
-                                    editor.hex_text.truncate(editor.cursor - 1);
-                                    editor.cursor -= 1;
-                                } else {
-                                    editor.hex_text.truncate(editor.cursor - 1);
-                                    editor.cursor -= 1;
-                                }
-                                // Clean up double spaces
-                                while editor.hex_text.contains("  ") {
-                                    editor.hex_text = editor.hex_text.replace("  ", " ");
-                                    editor.cursor = editor.cursor.min(editor.hex_text.len());
-                                }
-                            }
-                        }
-                    } else if rl.is_key_pressed(KeyboardKey::KEY_LEFT) {
-                        if editor.cursor > 0 {
-                            // Skip over space separators
-                            let bytes = editor.hex_text.as_bytes();
-                            if editor.cursor > 0
-                                && bytes[editor.cursor - 1] == b' '
-                                && editor.cursor >= 2
-                            {
-                                editor.cursor -= 2; // skip "XX " boundary
-                            } else {
-                                editor.cursor -= 1;
-                            }
+                    // Navigation always works (even while running, for scrolling)
+                    if rl.is_key_pressed(KeyboardKey::KEY_LEFT) {
+                        if editor.nibble == 1 {
+                            editor.nibble = 0;
+                        } else if editor.cursor_offset > 0 {
+                            editor.cursor_offset -= 1;
+                            editor.nibble = 1;
                         }
                     } else if rl.is_key_pressed(KeyboardKey::KEY_RIGHT) {
-                        if editor.cursor < editor.hex_text.len() {
-                            let bytes = editor.hex_text.as_bytes();
-                            if editor.cursor + 1 < bytes.len() && bytes[editor.cursor] == b' ' {
-                                editor.cursor += 2; // skip " XX" boundary
-                            } else {
-                                editor.cursor += 1;
-                            }
+                        if editor.nibble == 0 {
+                            editor.nibble = 1;
+                        } else {
+                            editor.cursor_offset = editor.cursor_offset.wrapping_add(1);
+                            editor.nibble = 0;
                         }
+                    } else if rl.is_key_pressed(KeyboardKey::KEY_UP) {
+                        let bpl = editor.bytes_per_line.max(1) as u16;
+                        if editor.cursor_offset >= bpl {
+                            editor.cursor_offset -= bpl;
+                        }
+                    } else if rl.is_key_pressed(KeyboardKey::KEY_DOWN) {
+                        let bpl = editor.bytes_per_line.max(1) as u16;
+                        editor.cursor_offset = editor.cursor_offset.wrapping_add(bpl);
                     } else if rl.is_key_pressed(KeyboardKey::KEY_HOME) {
-                        editor.cursor = 0;
+                        // Jump to start of current line
+                        let bpl = editor.bytes_per_line.max(1) as u16;
+                        editor.cursor_offset = (editor.cursor_offset / bpl) * bpl;
+                        editor.nibble = 0;
                     } else if rl.is_key_pressed(KeyboardKey::KEY_END) {
-                        editor.cursor = editor.hex_text.len();
-                    } else if rl.is_key_pressed(KeyboardKey::KEY_ENTER) {
-                        // Ctrl+Enter = Run the program (load into memory + start)
+                        // Jump to end of current line
+                        let bpl = editor.bytes_per_line.max(1) as u16;
+                        editor.cursor_offset = (editor.cursor_offset / bpl) * bpl + bpl - 1;
+                        editor.nibble = 1;
+                    } else if rl.is_key_pressed(KeyboardKey::KEY_PAGE_UP) {
+                        let bpl = editor.bytes_per_line.max(1) as u16;
+                        let page = bpl * 10; // ~10 lines per page
+                        editor.cursor_offset = editor.cursor_offset.saturating_sub(page);
+                    } else if rl.is_key_pressed(KeyboardKey::KEY_PAGE_DOWN) {
+                        let bpl = editor.bytes_per_line.max(1) as u16;
+                        let page = bpl * 10;
+                        editor.cursor_offset = editor.cursor_offset.wrapping_add(page);
+                    }
+
+                    // Clamp cursor_offset to 16-bit range
+                    // (wrapping_add can overflow; keep it within 0..=0xFFFF - base_addr)
+                    let max_offset = 0xFFFFu16.wrapping_sub(editor.base_addr);
+                    if editor.cursor_offset > max_offset {
+                        editor.cursor_offset = max_offset;
+                    }
+
+                    // Auto-scroll to keep cursor visible
+                    let bpl = editor.bytes_per_line.max(1) as u16;
+                    let cursor_line = (editor.cursor_offset / bpl) as usize;
+                    let visible_lines = 18; // approximate
+                    if cursor_line < editor.scroll {
+                        editor.scroll = cursor_line;
+                    }
+                    if cursor_line >= editor.scroll + visible_lines {
+                        editor.scroll = cursor_line - visible_lines + 1;
+                    }
+
+                    // Ctrl+Enter = Run from editor's current address (no loading needed)
+                    if rl.is_key_pressed(KeyboardKey::KEY_ENTER) {
                         let ctrl = rl.is_key_down(KeyboardKey::KEY_LEFT_CONTROL)
                             || rl.is_key_down(KeyboardKey::KEY_RIGHT_CONTROL);
-                        if ctrl {
-                            match editor.to_address() {
-                                Ok(addr) => {
-                                    match editor.to_bytes() {
-                                        Ok(bytes) => {
-                                            emu = Imsai8080::new();
-                                            emu.load_program(addr, &bytes);
-                                            emu.panel.set_address_switches(addr);
-                                            emu.panel.press_switch(PanelSwitch::RunStop);
-                                            emu.process_panel();
-                                            // Set address switches to match
-                                            for i in 0..16 {
-                                                addr_sw[i] = (addr >> (15 - i)) & 1 != 0;
-                                            }
-                                            cycles = 0;
-                                            term = [[0x20u8; TERM_COLS]; TERM_ROWS];
-                                            tcx = 0;
-                                            tcy = 0;
-                                            program_name = editor.program_name.clone();
-                                            // Switch to console to see output
-                                            crt_tab = CrtTab::Console;
-                                            status_msg = format!(
-                                                "Running: {} bytes at {:04X}",
-                                                bytes.len(),
-                                                addr
-                                            );
-                                            status_msg_timer = 180;
-                                            editor.dirty = false;
-                                        }
-                                        Err(e) => {
-                                            status_msg = format!("Hex error: {}", e);
-                                            status_msg_timer = 180;
-                                        }
-                                    }
-                                }
-                                Err(e) => {
-                                    status_msg = format!("Address error: {}", e);
-                                    status_msg_timer = 180;
-                                }
+                        if ctrl && cpu_stopped {
+                            let addr = editor.cursor_addr();
+                            emu.cpu.pc = addr;
+                            emu.panel.set_address_switches(addr);
+                            emu.panel.press_switch(PanelSwitch::RunStop);
+                            emu.process_panel();
+                            for i in 0..16 {
+                                addr_sw[i] = (addr >> (15 - i)) & 1 != 0;
                             }
+                            cycles = 0;
+                            program_name = editor.program_name.clone();
+                            crt_tab = CrtTab::Console;
+                            status_msg = format!("Running from {:04X}", addr);
+                            status_msg_timer = 180;
                         }
-                    } else {
-                        // Printable hex input
+                    }
+
+                    // Hex digit input: write nibble directly to memory (only when stopped)
+                    if cpu_stopped {
                         while let Some(ch) = rl.get_char_pressed() {
                             let upper = ch.to_ascii_uppercase();
                             if upper.is_ascii_hexdigit() {
-                                // Auto-insert space after every 2 hex digits
-                                // Count hex chars in current "word" from cursor backward
-                                let mut hex_count = 0;
-                                let bytes = editor.hex_text.as_bytes();
-                                let mut i = editor.cursor;
-                                while i > 0 && bytes[i - 1].is_ascii_hexdigit() {
-                                    hex_count += 1;
-                                    i -= 1;
+                                let digit = upper.to_digit(16).unwrap() as u8;
+                                let addr = editor.cursor_addr();
+                                let byte = emu.bus.mem_read(addr);
+                                if editor.nibble == 0 {
+                                    // High nibble: keep low nibble, replace high
+                                    let new_byte = (digit << 4) | (byte & 0x0F);
+                                    emu.bus.mem_write(addr, new_byte);
+                                    editor.nibble = 1;
+                                } else {
+                                    // Low nibble: keep high nibble, replace low
+                                    let new_byte = (byte & 0xF0) | digit;
+                                    emu.bus.mem_write(addr, new_byte);
+                                    // Advance to next byte
+                                    editor.cursor_offset = editor.cursor_offset.wrapping_add(1);
+                                    editor.nibble = 0;
                                 }
-                                if hex_count >= 2 {
-                                    // Insert space before new byte
-                                    editor.hex_text.insert(editor.cursor, ' ');
-                                    editor.cursor += 1;
-                                }
-                                editor.hex_text.insert(editor.cursor, upper as char);
-                                editor.cursor += 1;
-                                editor.dirty = true;
                             }
                         }
                     }
                 }
             }
 
-            // Mouse click handling for editor focus switching
+            // Mouse click handling for editor focus switching + cursor positioning
             if rl.is_mouse_button_pressed(MouseButton::MOUSE_BUTTON_LEFT) {
                 let m = mouse_layout;
-                // Compute CRT area geometry (same as draw section)
                 let term_y: i32 = panel_bottom + 10;
                 let term_x: i32 = 8;
                 let tab_h: i32 = 22;
@@ -1101,27 +1105,33 @@ fn main() {
                 {
                     editor.focus = EditorFocus::Address;
                 }
-                // Click on hex area
+                // Click on hex area — position cursor on the clicked byte
                 else if m.y >= hex_area_y as f32
                     && m.y < (term_y + REF_H - term_y - 28) as f32
                     && m.x >= term_x as f32
                 {
                     editor.focus = EditorFocus::Hex;
-                }
-                // Click on tab headers
-                let tab_names = ["CONSOLE", "CODE"];
-                for (i, _) in tab_names.iter().enumerate() {
-                    let tab_x = term_x + i as i32 * 100;
-                    if m.x >= tab_x as f32
-                        && m.x < (tab_x + 96) as f32
-                        && m.y >= term_y as f32
-                        && m.y < (term_y + tab_h) as f32
-                    {
-                        crt_tab = if i == 0 {
-                            CrtTab::Console
-                        } else {
-                            CrtTab::Code
-                        };
+                    // Compute which byte was clicked
+                    let (char_w, _) = if let Some(ref f) = term_font {
+                        let m = f.measure_text("M", 16.0, 0.0);
+                        (m.x as i32, 20)
+                    } else {
+                        (11, 18)
+                    };
+                    let hex_margin = 6;
+                    let prefix_w = 6 * char_w; // "XXXX: "
+                    let byte_cell_w = char_w * 3; // "XX " per byte
+                    let click_x = m.x as i32 - term_x - hex_margin - prefix_w;
+                    let click_y = m.y as i32 - hex_area_y - 4; // small top margin
+                    let bpl = editor.bytes_per_line.max(1);
+                    if click_x >= 0 && click_y >= 0 {
+                        let col = (click_x / byte_cell_w) as u16;
+                        let line = (click_y / 20) as u16; // ~20px per line
+                        let offset =
+                            (editor.scroll as u16 + line) * bpl as u16 + col.min(bpl as u16 - 1);
+                        let max_offset = 0xFFFFu16.wrapping_sub(editor.base_addr);
+                        editor.cursor_offset = offset.min(max_offset);
+                        editor.nibble = 0;
                     }
                 }
             }
@@ -1672,7 +1682,7 @@ fn main() {
             }
 
             CrtTab::Code => {
-                // === Code Editor view ===
+                // === Memory Editor view ===
                 let (char_w, _char_h) = if let Some(f) = tf {
                     let m = f.measure_text("M", 16.0, 0.0);
                     (m.x as i32, 20)
@@ -1680,7 +1690,23 @@ fn main() {
                     (11, 18)
                 };
 
-                // Row 1: Address field + program name
+                // Compute bytes per line from available width.
+                // Format: "XXXX: " (6 chars) + N * "XX " (3 chars each) + " " + ASCII (N chars)
+                // We need at least the addr prefix + hex + gap + ASCII. For 16 bytes/line:
+                //   6 + 16*3 + 2 + 16 = 72 chars. At 11px/char that's ~792px — fits 1264px width.
+                // At smaller windows, fall back to 8 bytes/line.
+                let hex_font_size = 16.0_f32;
+                let hex_line_h = if tf.is_some() { 20 } else { 18 };
+                let hex_margin = 6;
+                // Calculate how many bytes fit: prefix(6) + N*3(hex) + 2(gap) + N(ascii)
+                let available = term_w - hex_margin * 2;
+                let bpl_16 = available / (char_w * 4 + 2); // rough: each byte needs ~4 chars (3 hex + 1 ascii) + shared prefix
+                let bytes_per_line = if bpl_16 >= 16 { 16 } else if bpl_16 >= 8 { 8 } else { bpl_16.max(1) };
+                editor.bytes_per_line = bytes_per_line as usize;
+
+                let cpu_running = emu.panel.is_running() && !emu.cpu.halted;
+
+                // Row 1: Address field + program name + running indicator
                 let addr_field_y = content_y + 4;
                 let addr_field_h: i32 = 24;
                 let addr_label = "ADDR:";
@@ -1710,15 +1736,20 @@ fn main() {
                     d.draw_text(&addr_display, addr_box_x + 4, addr_field_y + 4, 14, t_fg);
                 }
 
-                // Program name / source path
-                let prog_label = if editor.dirty { "  (unsaved)" } else { "" };
+                // Program name or running indicator
+                let prog_label = if cpu_running {
+                    "  \u{25B6} RUNNING (read-only)"
+                } else {
+                    ""
+                };
                 let name_display = format!("{}{}", editor.program_name, prog_label);
                 if let Some(f) = tf {
                     d.draw_text_ex(f, &name_display,
                         raylib::math::Vector2::new((addr_box_x + addr_box_w + 12) as f32, (addr_field_y + 4) as f32),
-                        14.0, 1.0, txt_dim);
+                        14.0, 1.0, if cpu_running { led_on } else { txt_dim });
                 } else {
-                    d.draw_text(&name_display, addr_box_x + addr_box_w + 12, addr_field_y + 4, 12, txt_dim);
+                    d.draw_text(&name_display, addr_box_x + addr_box_w + 12, addr_field_y + 4, 12,
+                        if cpu_running { led_on } else { txt_dim });
                 }
 
                 // Hex editor area
@@ -1727,91 +1758,99 @@ fn main() {
                 d.draw_rectangle(term_x, hex_area_y, term_w, hex_area_h, rgb(4, 8, 4));
                 d.draw_rectangle_lines(term_x, hex_area_y, term_w, hex_area_h, if editor.focus == EditorFocus::Hex { t_fg } else { txt_dim });
 
-                // Render hex text with line wrapping and cursor
-                let hex_font_size = 16.0_f32;
-                let hex_line_h = if tf.is_some() { 20 } else { 18 };
-                let hex_margin = 6;
-                let bytes_per_line = ((term_w - hex_margin * 2) / (char_w * 3)) as usize; // "XX " per byte
-                let bytes_per_line = bytes_per_line.max(1);
-
-                // Word-wrap the hex text into lines
-                let hex_tokens: Vec<&str> = editor.hex_text.split_whitespace().collect();
-                let _num_lines = (hex_tokens.len() + bytes_per_line - 1).max(1) / bytes_per_line.max(1);
-
-                // Auto-scroll to keep cursor visible
-                let cursor_token_idx = editor.hex_text[..editor.cursor.min(editor.hex_text.len())]
-                    .split_whitespace().count();
-                let cursor_line = cursor_token_idx / bytes_per_line.max(1);
+                // Render hex dump from live memory
+                let base = editor.base_addr;
                 let visible_lines = (hex_area_h / hex_line_h) as usize;
-                if cursor_line < editor.scroll {
-                    editor.scroll = cursor_line;
-                }
-                if cursor_line >= editor.scroll + visible_lines {
-                    editor.scroll = cursor_line - visible_lines + 1;
-                }
+                let prefix_w = 6 * char_w; // "XXXX: "
+
+                // ASCII column starts after the hex bytes + a 2-char gap
+                let ascii_x_offset = prefix_w + bytes_per_line as i32 * char_w * 3 + char_w * 2;
 
                 for line_idx in 0..visible_lines {
-                    let token_start = (editor.scroll + line_idx) * bytes_per_line;
-                    if token_start >= hex_tokens.len() { break; }
-                    let token_end = (token_start + bytes_per_line).min(hex_tokens.len());
-                    let line_str: String = hex_tokens[token_start..token_end].join(" ");
+                    let line_addr = base.wrapping_add((editor.scroll * bytes_per_line as usize + line_idx as usize * bytes_per_line as usize) as u16);
                     let row_y = hex_area_y + hex_margin + line_idx as i32 * hex_line_h;
                     if row_y + hex_line_h > hex_area_y + hex_area_h { break; }
 
-                    // Address prefix for each line
-                    if let Ok(addr) = editor.to_address() {
-                        let line_addr = addr.wrapping_add((token_start * 1) as u16); // 1 byte per token
-                        let prefix = format!("{:04X}: ", line_addr);
-                        if let Some(f) = tf {
-                            d.draw_text_ex(f, &prefix,
-                                raylib::math::Vector2::new((term_x + hex_margin) as f32, row_y as f32),
-                                hex_font_size, 1.0, txt_dim);
+                    // Address prefix
+                    let prefix = format!("{:04X}: ", line_addr);
+                    if let Some(f) = tf {
+                        d.draw_text_ex(f, &prefix,
+                            raylib::math::Vector2::new((term_x + hex_margin) as f32, row_y as f32),
+                            hex_font_size, 1.0, txt_dim);
+                    } else {
+                        d.draw_text(&prefix, term_x + hex_margin, row_y, 14, txt_dim);
+                    }
+
+                    // Hex bytes
+                    let mut hex_str = String::new();
+                    let mut ascii_str = String::new();
+                    for b in 0..bytes_per_line {
+                        let addr = line_addr.wrapping_add(b as u16);
+                        let byte = emu.bus.mem_read(addr);
+                        if b > 0 {
+                            hex_str.push(' ');
+                        }
+                        hex_str.push_str(&format!("{:02X}", byte));
+                        // ASCII: printable chars shown, rest as dot
+                        if byte >= 0x20 && byte <= 0x7E {
+                            ascii_str.push(byte as char);
                         } else {
-                            d.draw_text(&prefix, term_x + hex_margin, row_y, 14, txt_dim);
+                            ascii_str.push('.');
                         }
                     }
 
-                    let prefix_w = 6 * char_w; // "XXXX: " = 6 chars
                     if let Some(f) = tf {
-                        d.draw_text_ex(f, &line_str,
+                        d.draw_text_ex(f, &hex_str,
                             raylib::math::Vector2::new((term_x + hex_margin + prefix_w) as f32, row_y as f32),
                             hex_font_size, 1.0, t_fg);
                     } else {
-                        d.draw_text(&line_str, term_x + hex_margin + prefix_w, row_y, 14, t_fg);
+                        d.draw_text(&hex_str, term_x + hex_margin + prefix_w, row_y, 14, t_fg);
+                    }
+
+                    // ASCII column
+                    if let Some(f) = tf {
+                        d.draw_text_ex(f, &ascii_str,
+                            raylib::math::Vector2::new((term_x + hex_margin + ascii_x_offset) as f32, row_y as f32),
+                            hex_font_size, 1.0, txt_dim);
+                    } else {
+                        d.draw_text(&ascii_str, term_x + hex_margin + ascii_x_offset, row_y, 14, txt_dim);
                     }
                 }
 
-                // Cursor indicator
-                if editor.focus == EditorFocus::Hex && (editor.cursor_blink / 15) % 2 == 0 {
-                    // Find the pixel position of the cursor
-                    let text_before_cursor = &editor.hex_text[..editor.cursor.min(editor.hex_text.len())];
-                    let tokens_before = text_before_cursor.split_whitespace().count();
-                    let cursor_line = tokens_before / bytes_per_line.max(1);
-                    let cursor_col = tokens_before % bytes_per_line.max(1);
-                    // Also count partial token position
-                    let _partial = text_before_cursor.len() - text_before_cursor.trim_end().len();
-                    let prefix_w = 6 * char_w;
-                    let cursor_x = term_x + hex_margin + prefix_w + cursor_col as i32 * char_w * 3;
-                    let cursor_y = hex_area_y + hex_margin + (cursor_line as i32 - editor.scroll as i32) * hex_line_h;
+                // Cursor indicator (only when hex focused and not running)
+                if editor.focus == EditorFocus::Hex && !cpu_running && (editor.cursor_blink / 15) % 2 == 0 {
+                    let bpl = bytes_per_line.max(1) as u16;
+                    let cursor_line = (editor.cursor_offset / bpl) as i32 - editor.scroll as i32;
+                    let cursor_col = editor.cursor_offset % bpl;
+                    // Cursor X: prefix + column * 3 chars (2 hex + space) + nibble offset within byte
+                    let nibble_offset = if editor.nibble == 0 { 0 } else { char_w };
+                    let cursor_x = term_x + hex_margin + prefix_w + cursor_col as i32 * char_w * 3 + nibble_offset;
+                    let cursor_y = hex_area_y + hex_margin + cursor_line * hex_line_h;
                     if cursor_y >= hex_area_y && cursor_y < hex_area_y + hex_area_h {
-                        d.draw_rectangle(cursor_x, cursor_y, 2, hex_line_h, t_fg);
+                        d.draw_rectangle(cursor_x, cursor_y, char_w, hex_line_h,
+                            raylib::color::Color { r: 50, g: 255, b: 50, a: 80 });
                     }
                 }
 
-                // Byte count display
-                let byte_count = editor.hex_text.split_whitespace().count();
-                let count_str = format!("{} bytes", byte_count);
+                // Cursor address display (bottom right of address bar)
+                let cursor_addr = editor.cursor_addr();
+                let cursor_byte = emu.bus.mem_read(cursor_addr);
+                let info_str = format!("cursor: {:04X} = {:02X}", cursor_addr, cursor_byte);
                 if let Some(f) = tf {
-                    d.draw_text_ex(f, &count_str,
-                        raylib::math::Vector2::new((term_x + term_w - 100) as f32, (addr_field_y + 4) as f32),
+                    d.draw_text_ex(f, &info_str,
+                        raylib::math::Vector2::new((term_x + term_w - 160) as f32, (addr_field_y + 4) as f32),
                         14.0, 1.0, txt_dim);
                 } else {
-                    d.draw_text(&count_str, term_x + term_w - 100, addr_field_y + 4, 12, txt_dim);
+                    d.draw_text(&info_str, term_x + term_w - 160, addr_field_y + 4, 12, txt_dim);
                 }
 
-                // Help bar at the bottom of the code editor
+                // Help bar at the bottom of the editor
                 let help_y = hex_area_y + hex_area_h + 4;
-                let help_text = "F2 load file   F3 save   Ctrl+Enter run   Tab addr/hex   F6 console";
+                let help_text = if cpu_running {
+                    "F2 load file   F3 save   F6 console   (scroll only while running)"
+                } else {
+                    "F2 load file   F3 save   Ctrl+Enter run   Tab addr/hex   F6 console"
+                };
                 if let Some(f) = tf {
                     d.draw_text_ex(f, help_text,
                         raylib::math::Vector2::new((term_x + 6) as f32, help_y as f32),
