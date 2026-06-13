@@ -4,9 +4,132 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use rust_imsai_emulator::{
-    execute_panel_program, find_program_start, load_program_file, memory_to_program,
-    save_program_file,
+    execute_panel_program, find_program_start, load_program_file, memory_to_program, parse_hex16,
+    parse_hex_bytes, save_program_file,
 };
+
+/// Which view occupies the CRT terminal area.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum CrtTab {
+    Console,
+    Code,
+}
+
+/// State for the hex code editor panel.
+#[derive(Debug)]
+struct EditorState {
+    /// Hex text buffer (space-separated hex bytes, e.g. "3E 41 D3 00").
+    hex_text: String,
+    /// Load address as hex string (e.g. "0000").
+    addr_text: String,
+    /// Program name loaded from file, or empty if unsaved/new.
+    program_name: String,
+    /// Source path if loaded from a file.
+    source_path: Option<PathBuf>,
+    /// Cursor position within hex_text (byte offset).
+    cursor: usize,
+    /// Vertical scroll in lines.
+    scroll: usize,
+    /// Whether the editor has unsaved changes.
+    dirty: bool,
+    /// Currently focused field: address or hex body.
+    focus: EditorFocus,
+    /// Blink timer for cursor (frames).
+    cursor_blink: i32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum EditorFocus {
+    Address,
+    Hex,
+}
+
+impl Default for EditorState {
+    fn default() -> Self {
+        Self {
+            hex_text: String::new(),
+            addr_text: "0000".to_string(),
+            program_name: String::new(),
+            source_path: None,
+            cursor: 0,
+            scroll: 0,
+            dirty: false,
+            focus: EditorFocus::Hex,
+            cursor_blink: 0,
+        }
+    }
+}
+
+impl EditorState {
+    /// Parse the current hex text into bytes. Returns error message on failure.
+    fn to_bytes(&self) -> Result<Vec<u8>, String> {
+        if self.hex_text.trim().is_empty() {
+            return Err("No hex data entered".to_string());
+        }
+        parse_hex_bytes(&self.hex_text)
+    }
+
+    /// Parse the address field.
+    fn to_address(&self) -> Result<u16, String> {
+        parse_hex16(&self.addr_text)
+    }
+
+    /// Build a PanelProgram from the current editor contents.
+    fn to_program(&self) -> Result<rust_imsai_emulator::PanelProgram, String> {
+        let addr = self.to_address()?;
+        let bytes = self.to_bytes()?;
+        let data_str: String = bytes
+            .iter()
+            .map(|b| format!("{:02X}", b))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let name = if self.program_name.is_empty() {
+            format!("code_{:04X}", addr)
+        } else {
+            self.program_name.clone()
+        };
+        Ok(rust_imsai_emulator::PanelProgram {
+            name,
+            description: format!("Code editor program, {} bytes at {:04X}", bytes.len(), addr),
+            steps: vec![
+                rust_imsai_emulator::PanelStep::Load {
+                    address: format!("{:04X}", addr),
+                    data: data_str,
+                },
+                rust_imsai_emulator::PanelStep::Run {
+                    address: format!("{:04X}", addr),
+                },
+            ],
+        })
+    }
+
+    /// Load a program file into the editor, populating the hex text.
+    fn load_from_program(&mut self, prog: &rust_imsai_emulator::PanelProgram, path: &Path) {
+        self.hex_text.clear();
+        self.addr_text = "0000".to_string();
+        self.program_name = prog.name.clone();
+        self.source_path = Some(path.to_path_buf());
+        self.dirty = false;
+        self.cursor = 0;
+        self.scroll = 0;
+
+        for step in &prog.steps {
+            match step {
+                rust_imsai_emulator::PanelStep::Load { address, data } => {
+                    self.addr_text = address.clone();
+                    if !self.hex_text.is_empty() {
+                        self.hex_text.push(' ');
+                    }
+                    self.hex_text.push_str(data);
+                }
+                rust_imsai_emulator::PanelStep::Run { address } => {
+                    self.addr_text = address.clone();
+                }
+                _ => {}
+            }
+        }
+    }
+}
 
 /// State for the in-app file picker overlay.
 #[derive(Debug)]
@@ -342,6 +465,8 @@ fn main() {
     let mut status_msg = String::new();
     let mut status_msg_timer: i32 = 0; // frames remaining
     let mut picker = PickerState::Closed;
+    let mut crt_tab = CrtTab::Console;
+    let mut editor = EditorState::default();
 
     // Colors - IMSAI 8080: black panel face, white silk-screen text,
     // red LEDs, blue/red paddle switches, gray chassis surround.
@@ -382,16 +507,18 @@ fn main() {
         // Mouse coords come back in window pixels. Subtract the blit
         // origin and divide by scale to recover the layout-space coord
         // (1024x680) that every hit test in this file uses.
-        let mouse_pos = || -> Vector2 {
-            let m = rl.get_mouse_position();
-            Vector2::new((m.x - blit_ox) / scale, (m.y - blit_oy) / scale)
-        };
+        // Computed once per frame to avoid borrow conflicts with rl.
+        let raw_mouse = rl.get_mouse_position();
+        let mouse_layout = Vector2::new(
+            (raw_mouse.x - blit_ox) / scale,
+            (raw_mouse.y - blit_oy) / scale,
+        );
 
         // ---- Input: toggle switches (suppressed when picker is open) ----
         if matches!(picker, PickerState::Closed)
             && rl.is_mouse_button_pressed(MouseButton::MOUSE_BUTTON_LEFT)
         {
-            let m = mouse_pos();
+            let m = mouse_layout;
 
             // Helper: did the click land on the paddle centered at column `cx`?
             let hit_paddle = |cx: i32| -> bool {
@@ -600,7 +727,7 @@ fn main() {
                 }
                 // Mouse click to select entry
                 if rl.is_mouse_button_pressed(MouseButton::MOUSE_BUTTON_LEFT) {
-                    let m = mouse_pos();
+                    let m = mouse_layout;
                     let overlay_x: i32 = 100;
                     let overlay_y: i32 = 150;
                     let overlay_w: i32 = 540;
@@ -646,35 +773,46 @@ fn main() {
                 PickerAction::Load(path) => {
                     match load_program_file(&path) {
                         Ok(prog) => {
-                            eprintln!(
-                                "Loaded: {} (PC=0x{:04X}, running={})",
-                                prog.name,
-                                emu.cpu.pc,
-                                emu.panel.is_running()
-                            );
-                            emu = Imsai8080::new();
-                            if let Err(e) = execute_panel_program(&mut emu, &prog) {
-                                eprintln!("Program execution error: {}", e);
-                            }
-                            eprintln!(
-                                "After execute: PC=0x{:04X}, running={}",
-                                emu.cpu.pc,
-                                emu.panel.is_running()
-                            );
-                            if let Some(start_addr) = find_program_start(&prog) {
-                                for i in 0..16 {
-                                    addr_sw[i] = (start_addr >> (15 - i)) & 1 != 0;
+                            if crt_tab == CrtTab::Code {
+                                // Load into editor instead of running
+                                editor.load_from_program(&prog, &path);
+                                status_msg = format!(
+                                    "Editor: {} ({} bytes)",
+                                    prog.name,
+                                    editor.hex_text.split_whitespace().count()
+                                );
+                                status_msg_timer = 180;
+                            } else {
+                                eprintln!(
+                                    "Loaded: {} (PC=0x{:04X}, running={})",
+                                    prog.name,
+                                    emu.cpu.pc,
+                                    emu.panel.is_running()
+                                );
+                                emu = Imsai8080::new();
+                                if let Err(e) = execute_panel_program(&mut emu, &prog) {
+                                    eprintln!("Program execution error: {}", e);
                                 }
+                                eprintln!(
+                                    "After execute: PC=0x{:04X}, running={}",
+                                    emu.cpu.pc,
+                                    emu.panel.is_running()
+                                );
+                                if let Some(start_addr) = find_program_start(&prog) {
+                                    for i in 0..16 {
+                                        addr_sw[i] = (start_addr >> (15 - i)) & 1 != 0;
+                                    }
+                                }
+                                program_name = prog.name.clone();
+                                cycles = 0;
+                                term = [[0x20u8; TERM_COLS]; TERM_ROWS];
+                                tcx = 0;
+                                tcy = 0;
+                                // If the program has a "run" step, the front panel is already in RUN mode
+                                status_msg =
+                                    format!("Loaded: {} (PC={:04X})", program_name, emu.cpu.pc);
+                                status_msg_timer = 180;
                             }
-                            program_name = prog.name.clone();
-                            cycles = 0;
-                            term = [[0x20u8; TERM_COLS]; TERM_ROWS];
-                            tcx = 0;
-                            tcy = 0;
-                            // If the program has a "run" step, the front panel is already in RUN mode
-                            status_msg =
-                                format!("Loaded: {} (PC={:04X})", program_name, emu.cpu.pc);
-                            status_msg_timer = 180;
                         }
                         Err(e) => {
                             status_msg = format!("Error: {}", e);
@@ -701,26 +839,57 @@ fn main() {
                     picker = PickerState::Closed;
                 }
                 PickerAction::Save(filename) => {
-                    let addr_val: u16 = addr_sw.iter().enumerate().fold(0u16, |a, (i, &on)| {
-                        if on {
-                            a | (1 << (15 - i))
-                        } else {
-                            a
-                        }
-                    });
-                    let start = addr_val;
-                    let dump_len: u16 = 256;
-                    let prog = memory_to_program(&emu, start, dump_len);
-                    if fs::create_dir_all(default_programs_dir()).is_ok() {
-                        let save_path = default_programs_dir().join(format!("{}.json", filename));
-                        match save_program_file(&prog, &save_path) {
-                            Ok(()) => {
-                                status_msg = format!("Saved: {}", save_path.display());
-                                status_msg_timer = 180;
+                    if crt_tab == CrtTab::Code {
+                        // Save from the code editor
+                        match editor.to_program() {
+                            Ok(prog) => {
+                                if fs::create_dir_all(default_programs_dir()).is_ok() {
+                                    let save_path =
+                                        default_programs_dir().join(format!("{}.json", filename));
+                                    match save_program_file(&prog, &save_path) {
+                                        Ok(()) => {
+                                            editor.program_name = prog.name.clone();
+                                            editor.source_path = Some(save_path.clone());
+                                            editor.dirty = false;
+                                            status_msg = format!("Saved: {}", save_path.display());
+                                            status_msg_timer = 180;
+                                        }
+                                        Err(e) => {
+                                            status_msg = format!("Save error: {}", e);
+                                            status_msg_timer = 180;
+                                        }
+                                    }
+                                }
                             }
                             Err(e) => {
                                 status_msg = format!("Save error: {}", e);
                                 status_msg_timer = 180;
+                            }
+                        }
+                    } else {
+                        // Original behavior: dump memory to program file
+                        let addr_val: u16 = addr_sw.iter().enumerate().fold(0u16, |a, (i, &on)| {
+                            if on {
+                                a | (1 << (15 - i))
+                            } else {
+                                a
+                            }
+                        });
+                        let start = addr_val;
+                        let dump_len: u16 = 256;
+                        let prog = memory_to_program(&emu, start, dump_len);
+                        if fs::create_dir_all(default_programs_dir()).is_ok() {
+                            let save_path =
+                                default_programs_dir().join(format!("{}.json", filename));
+                            match save_program_file(&prog, &save_path) {
+                                Ok(()) => {
+                                    status_msg = format!("Saved: {}", save_path.display());
+                                    status_msg_timer = 180;
+                                }
+                                Err(e) => {
+                                    status_msg = format!("Save error: {}", e);
+                                    status_msg_timer = 180;
+                                }
                             }
                         }
                     }
@@ -734,7 +903,9 @@ fn main() {
         // R: Cold reset (clear memory, STOPPED, delete saved state).
         // Suppressed while running so typing an 'R' at a console prompt
         // doesn't wipe the machine -- stop with F5 first.
+        // Also suppressed when the code editor is active (R is a valid hex char).
         if matches!(picker, PickerState::Closed)
+            && crt_tab == CrtTab::Console
             && (emu.panel.is_stopped() || emu.cpu.halted)
             && rl.is_key_pressed(KeyboardKey::KEY_R)
         {
@@ -751,15 +922,223 @@ fn main() {
             let _ = std::fs::remove_file(MEMORY_FILE);
         }
 
-        // Keyboard input for the console terminal (only while running and the
-        // picker is closed). Forwards keystrokes to the 8251A UART RX so you
-        // can interact with software running on the machine.
+        // F6: Toggle between CONSOLE and CODE tabs in the CRT area.
+        if matches!(picker, PickerState::Closed) && rl.is_key_pressed(KeyboardKey::KEY_F6) {
+            crt_tab = if crt_tab == CrtTab::Console {
+                CrtTab::Code
+            } else {
+                CrtTab::Console
+            };
+        }
+
+        // === Code Editor Input ===
+        // Only when the CODE tab is active, picker is closed, and CPU is stopped.
+        if crt_tab == CrtTab::Code && matches!(picker, PickerState::Closed) {
+            editor.cursor_blink += 1;
+
+            // Tab key switches focus between address and hex body.
+            if rl.is_key_pressed(KeyboardKey::KEY_TAB) {
+                editor.focus = if editor.focus == EditorFocus::Address {
+                    EditorFocus::Hex
+                } else {
+                    EditorFocus::Address
+                };
+            }
+
+            match editor.focus {
+                EditorFocus::Address => {
+                    if rl.is_key_pressed(KeyboardKey::KEY_BACKSPACE) {
+                        editor.addr_text.pop();
+                    }
+                    while let Some(ch) = rl.get_char_pressed() {
+                        let lower = ch.to_ascii_lowercase();
+                        if lower.is_ascii_hexdigit() && editor.addr_text.len() < 4 {
+                            editor.addr_text.push(lower);
+                        }
+                    }
+                    // Enter moves focus to hex body
+                    if rl.is_key_pressed(KeyboardKey::KEY_ENTER) {
+                        editor.focus = EditorFocus::Hex;
+                    }
+                }
+                EditorFocus::Hex => {
+                    if rl.is_key_pressed(KeyboardKey::KEY_BACKSPACE) {
+                        // Delete backward; remove trailing space if at a boundary
+                        if editor.cursor > 0 {
+                            if editor.cursor <= editor.hex_text.len() {
+                                // If the char before cursor is a space and the one before that
+                                // is a hex digit, remove the space too (clean up word boundary)
+                                let before = &editor.hex_text[..editor.cursor];
+                                if before.ends_with(' ') && editor.cursor >= 2 {
+                                    editor.hex_text.truncate(editor.cursor - 1);
+                                    editor.cursor -= 1;
+                                } else {
+                                    editor.hex_text.truncate(editor.cursor - 1);
+                                    editor.cursor -= 1;
+                                }
+                                // Clean up double spaces
+                                while editor.hex_text.contains("  ") {
+                                    editor.hex_text = editor.hex_text.replace("  ", " ");
+                                    editor.cursor = editor.cursor.min(editor.hex_text.len());
+                                }
+                            }
+                        }
+                    } else if rl.is_key_pressed(KeyboardKey::KEY_LEFT) {
+                        if editor.cursor > 0 {
+                            // Skip over space separators
+                            let bytes = editor.hex_text.as_bytes();
+                            if editor.cursor > 0
+                                && bytes[editor.cursor - 1] == b' '
+                                && editor.cursor >= 2
+                            {
+                                editor.cursor -= 2; // skip "XX " boundary
+                            } else {
+                                editor.cursor -= 1;
+                            }
+                        }
+                    } else if rl.is_key_pressed(KeyboardKey::KEY_RIGHT) {
+                        if editor.cursor < editor.hex_text.len() {
+                            let bytes = editor.hex_text.as_bytes();
+                            if editor.cursor + 1 < bytes.len() && bytes[editor.cursor] == b' ' {
+                                editor.cursor += 2; // skip " XX" boundary
+                            } else {
+                                editor.cursor += 1;
+                            }
+                        }
+                    } else if rl.is_key_pressed(KeyboardKey::KEY_HOME) {
+                        editor.cursor = 0;
+                    } else if rl.is_key_pressed(KeyboardKey::KEY_END) {
+                        editor.cursor = editor.hex_text.len();
+                    } else if rl.is_key_pressed(KeyboardKey::KEY_ENTER) {
+                        // Ctrl+Enter = Run the program (load into memory + start)
+                        let ctrl = rl.is_key_down(KeyboardKey::KEY_LEFT_CONTROL)
+                            || rl.is_key_down(KeyboardKey::KEY_RIGHT_CONTROL);
+                        if ctrl {
+                            match editor.to_address() {
+                                Ok(addr) => {
+                                    match editor.to_bytes() {
+                                        Ok(bytes) => {
+                                            emu = Imsai8080::new();
+                                            emu.load_program(addr, &bytes);
+                                            emu.panel.set_address_switches(addr);
+                                            emu.panel.press_switch(PanelSwitch::RunStop);
+                                            emu.process_panel();
+                                            // Set address switches to match
+                                            for i in 0..16 {
+                                                addr_sw[i] = (addr >> (15 - i)) & 1 != 0;
+                                            }
+                                            cycles = 0;
+                                            term = [[0x20u8; TERM_COLS]; TERM_ROWS];
+                                            tcx = 0;
+                                            tcy = 0;
+                                            program_name = editor.program_name.clone();
+                                            // Switch to console to see output
+                                            crt_tab = CrtTab::Console;
+                                            status_msg = format!(
+                                                "Running: {} bytes at {:04X}",
+                                                bytes.len(),
+                                                addr
+                                            );
+                                            status_msg_timer = 180;
+                                            editor.dirty = false;
+                                        }
+                                        Err(e) => {
+                                            status_msg = format!("Hex error: {}", e);
+                                            status_msg_timer = 180;
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    status_msg = format!("Address error: {}", e);
+                                    status_msg_timer = 180;
+                                }
+                            }
+                        }
+                    } else {
+                        // Printable hex input
+                        while let Some(ch) = rl.get_char_pressed() {
+                            let upper = ch.to_ascii_uppercase();
+                            if upper.is_ascii_hexdigit() {
+                                // Auto-insert space after every 2 hex digits
+                                // Count hex chars in current "word" from cursor backward
+                                let mut hex_count = 0;
+                                let bytes = editor.hex_text.as_bytes();
+                                let mut i = editor.cursor;
+                                while i > 0 && bytes[i - 1].is_ascii_hexdigit() {
+                                    hex_count += 1;
+                                    i -= 1;
+                                }
+                                if hex_count >= 2 {
+                                    // Insert space before new byte
+                                    editor.hex_text.insert(editor.cursor, ' ');
+                                    editor.cursor += 1;
+                                }
+                                editor.hex_text.insert(editor.cursor, upper as char);
+                                editor.cursor += 1;
+                                editor.dirty = true;
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Mouse click handling for editor focus switching
+            if rl.is_mouse_button_pressed(MouseButton::MOUSE_BUTTON_LEFT) {
+                let m = mouse_layout;
+                // Compute CRT area geometry (same as draw section)
+                let term_y: i32 = panel_bottom + 10;
+                let term_x: i32 = 8;
+                let tab_h: i32 = 22;
+                let addr_field_y = term_y + tab_h + 4;
+                let addr_field_h: i32 = 24;
+                let hex_area_y = addr_field_y + addr_field_h + 4;
+
+                // Click on address field
+                if m.y >= addr_field_y as f32
+                    && m.y < (addr_field_y + addr_field_h) as f32
+                    && m.x >= (term_x + 80) as f32
+                    && m.x < (term_x + 180) as f32
+                {
+                    editor.focus = EditorFocus::Address;
+                }
+                // Click on hex area
+                else if m.y >= hex_area_y as f32
+                    && m.y < (term_y + REF_H - term_y - 28) as f32
+                    && m.x >= term_x as f32
+                {
+                    editor.focus = EditorFocus::Hex;
+                }
+                // Click on tab headers
+                let tab_names = ["CONSOLE", "CODE"];
+                for (i, _) in tab_names.iter().enumerate() {
+                    let tab_x = term_x + i as i32 * 100;
+                    if m.x >= tab_x as f32
+                        && m.x < (tab_x + 96) as f32
+                        && m.y >= term_y as f32
+                        && m.y < (term_y + tab_h) as f32
+                    {
+                        crt_tab = if i == 0 {
+                            CrtTab::Console
+                        } else {
+                            CrtTab::Code
+                        };
+                    }
+                }
+            }
+        }
+
+        // Console keyboard input suppressed when CODE tab is active
+        // (moved below to check crt_tab)
         //
         // - Printable characters are sent as-typed (case preserved).
         // - Ctrl+<A..Z> are sent as control codes 0x01..0x1A (so Ctrl+C warm
         //   boot, Ctrl+S/Ctrl+Q flow control, etc. reach the guest).
         // - Enter/Backspace/Tab/Esc are mapped to CR/DEL/HT/ESC.
-        if emu.panel.is_running() && !emu.cpu.halted && matches!(picker, PickerState::Closed) {
+        if emu.panel.is_running()
+            && !emu.cpu.halted
+            && matches!(picker, PickerState::Closed)
+            && crt_tab == CrtTab::Console
+        {
             let ctrl = rl.is_key_down(KeyboardKey::KEY_LEFT_CONTROL)
                 || rl.is_key_down(KeyboardKey::KEY_RIGHT_CONTROL);
 
@@ -1156,13 +1535,13 @@ fn main() {
             d.draw_text_ex(f, &line,
                 raylib::math::Vector2::new(10.0, (REF_H - 24) as f32),
                 14.0, 1.0, txt_dim);
-            d.draw_text_ex(f, "F5 run/stop  F2 load  F4 disk  F3 save  R reset",
+            d.draw_text_ex(f, "F5 run/stop  F2 load  F4 disk  F3 save  F6 editor  R reset",
                 raylib::math::Vector2::new((REF_W - 520) as f32, (REF_H - 24) as f32),
                 14.0, 1.0, txt_dim);
         } else {
             d.draw_text(&line, 10, REF_H - 22, 14, txt_dim);
             d.draw_text(
-                "F5 run/stop  F2 load  F4 disk  F3 save  R reset",
+                "F5 run/stop  F2 load  F4 disk  F3 save  F6 editor  R reset",
                 REF_W - 500,
                 REF_H - 22,
                 14,
@@ -1175,6 +1554,7 @@ fn main() {
         let term_h: i32 = REF_H - term_y - 28;
         let term_x: i32 = 8;
         let term_w: i32 = REF_W - 16;
+        let tab_h: i32 = 22;
         // CRT bezel (dark rounded border)
         d.draw_rectangle(
             term_x - 4,
@@ -1201,78 +1581,243 @@ fn main() {
         for scan_y in (term_y..term_y + term_h).step_by(4) {
             d.draw_rectangle(term_x, scan_y, term_w, 1, scanline_col);
         }
-        // CRT label
-        let con_color = raylib::color::Color { r: 30, g: 80, b: 30, a: 180 };
-        if let Some(f) = tf {
-            d.draw_text_ex(f, "CONSOLE",
-                raylib::math::Vector2::new((term_x + 4) as f32, (term_y + 2) as f32),
-                17.0, 1.0, con_color);
-        } else {
-            d.draw_text("CONSOLE", term_x + 4, term_y + 2, 16, con_color);
-        }
 
-        let term_text_y = term_y + 20;
-        let term_text_x = term_x + 6;
-        // Measure actual character width from the monospace font (or fall back to constant)
-        let (char_w, char_h) = if let Some(f) = tf {
-            let m = f.measure_text("M", TERM_FONT_SIZE as f32, 0.0);
-            (m.x as i32, TERM_CHAR_H)
-        } else {
-            (TERM_CHAR_W, TERM_CHAR_H)
-        };
-        for row in 0..TERM_ROWS {
-            let row_top = term_text_y + row as i32 * char_h;
-            if row_top + char_h > term_y + term_h {
-                break;
-            }
-            // Build the row string (printable ASCII only, replace others with space)
-            let row_str: String = (0..TERM_COLS)
-                .map(|col| {
-                    let ch = term[row][col];
-                    if ch >= 0x20 && ch <= 0x7E { ch as char } else { ' ' }
-                })
-                .collect();
+        // === Tab headers ===
+        let tab_names = ["CONSOLE", "CODE"];
+        let tab_active_color = rgb(30, 100, 30);
+        let tab_inactive_color = rgb(15, 40, 15);
+        for (i, name) in tab_names.iter().enumerate() {
+            let tab_x = term_x + i as i32 * 100;
+            let is_active = (i == 0 && crt_tab == CrtTab::Console) || (i == 1 && crt_tab == CrtTab::Code);
+            d.draw_rectangle(tab_x, term_y, 96, tab_h, if is_active { tab_active_color } else { tab_inactive_color });
             if let Some(f) = tf {
-                d.draw_text_ex(
-                    f,
-                    &row_str,
-                    raylib::math::Vector2::new(term_text_x as f32, row_top as f32),
-                    TERM_FONT_SIZE as f32,
-                    0.0,
-                    t_fg,
-                );
+                d.draw_text_ex(f, name,
+                    raylib::math::Vector2::new((tab_x + 6) as f32, (term_y + 3) as f32),
+                    16.0, 1.0, if is_active { t_fg } else { txt_dim });
             } else {
-                d.draw_text(&row_str, term_text_x, row_top, TERM_FONT_SIZE, t_fg);
+                d.draw_text(name, tab_x + 6, term_y + 3, 14, if is_active { t_fg } else { txt_dim });
             }
         }
 
-        // === I/O log (right side of terminal area) ===
-        let iolog_x = term_x + TERM_COLS as i32 * char_w + 20;
-        if iolog_x + 160 < term_x + term_w {
-            let log_label_size = 16.0_f32;
-            let log_entry_size = 14.0_f32;
-            let log_line_h = if tf.is_some() { 19 } else { 16 };
-            if let Some(f) = tf {
-                d.draw_text_ex(f, "I/O LOG",
-                    raylib::math::Vector2::new(iolog_x as f32, (term_y + 4) as f32),
-                    log_label_size, 1.0,
-                    raylib::color::Color { r: 30, g: 80, b: 30, a: 180 });
-            } else {
-                d.draw_text("I/O LOG", iolog_x, term_y + 4, 14,
-                    raylib::color::Color { r: 30, g: 80, b: 30, a: 180 });
-            }
-            let io_log = emu.panel.io_log();
-            let log_start = io_log.len().saturating_sub(10);
-            for (i, ev) in io_log[log_start..].iter().enumerate() {
-                let dir = if ev.is_write { "OUT" } else { "IN " };
-                let kind = if ev.is_io { "IO" } else { "MEM" };
-                let text = format!("{} {:04X} {:02X} {}", dir, ev.address, ev.data, kind);
-                if let Some(f) = tf {
-                    d.draw_text_ex(f, &text,
-                        raylib::math::Vector2::new(iolog_x as f32, (term_y + 18 + i as i32 * log_line_h) as f32),
-                        log_entry_size, 1.0, txt_dim);
+        // === Tab content ===
+        let content_y = term_y + tab_h;
+        let content_h = term_h - tab_h;
+
+        match crt_tab {
+            CrtTab::Console => {
+                let term_text_y = content_y + 4;
+                let term_text_x = term_x + 6;
+                // Measure actual character width from the monospace font (or fall back to constant)
+                let (char_w, char_h) = if let Some(f) = tf {
+                    let m = f.measure_text("M", TERM_FONT_SIZE as f32, 0.0);
+                    (m.x as i32, TERM_CHAR_H)
                 } else {
-                    d.draw_text(&text, iolog_x, term_y + 22 + i as i32 * 16, 13, txt_dim);
+                    (TERM_CHAR_W, TERM_CHAR_H)
+                };
+                for row in 0..TERM_ROWS {
+                    let row_top = term_text_y + row as i32 * char_h;
+                    if row_top + char_h > term_y + term_h {
+                        break;
+                    }
+                    // Build the row string (printable ASCII only, replace others with space)
+                    let row_str: String = (0..TERM_COLS)
+                        .map(|col| {
+                            let ch = term[row][col];
+                            if ch >= 0x20 && ch <= 0x7E { ch as char } else { ' ' }
+                        })
+                        .collect();
+                    if let Some(f) = tf {
+                        d.draw_text_ex(
+                            f,
+                            &row_str,
+                            raylib::math::Vector2::new(term_text_x as f32, row_top as f32),
+                            TERM_FONT_SIZE as f32,
+                            0.0,
+                            t_fg,
+                        );
+                    } else {
+                        d.draw_text(&row_str, term_text_x, row_top, TERM_FONT_SIZE, t_fg);
+                    }
+                }
+
+                // I/O log (right side of terminal area)
+                let iolog_x = term_x + TERM_COLS as i32 * char_w + 20;
+                if iolog_x + 160 < term_x + term_w {
+                    let log_entry_size = 14.0_f32;
+                    let log_line_h = if tf.is_some() { 19 } else { 16 };
+                    if let Some(f) = tf {
+                        d.draw_text_ex(f, "I/O LOG",
+                            raylib::math::Vector2::new(iolog_x as f32, (content_y + 4) as f32),
+                            16.0, 1.0,
+                            raylib::color::Color { r: 30, g: 80, b: 30, a: 180 });
+                    } else {
+                        d.draw_text("I/O LOG", iolog_x, content_y + 4, 14,
+                            raylib::color::Color { r: 30, g: 80, b: 30, a: 180 });
+                    }
+                    let io_log = emu.panel.io_log();
+                    let log_start = io_log.len().saturating_sub(10);
+                    for (i, ev) in io_log[log_start..].iter().enumerate() {
+                        let dir = if ev.is_write { "OUT" } else { "IN " };
+                        let kind = if ev.is_io { "IO" } else { "MEM" };
+                        let text = format!("{} {:04X} {:02X} {}", dir, ev.address, ev.data, kind);
+                        if let Some(f) = tf {
+                            d.draw_text_ex(f, &text,
+                                raylib::math::Vector2::new(iolog_x as f32, (content_y + 22 + i as i32 * log_line_h) as f32),
+                                log_entry_size, 1.0, txt_dim);
+                        } else {
+                            d.draw_text(&text, iolog_x, content_y + 22 + i as i32 * 16, 13, txt_dim);
+                        }
+                    }
+                }
+            }
+
+            CrtTab::Code => {
+                // === Code Editor view ===
+                let (char_w, _char_h) = if let Some(f) = tf {
+                    let m = f.measure_text("M", 16.0, 0.0);
+                    (m.x as i32, 20)
+                } else {
+                    (11, 18)
+                };
+
+                // Row 1: Address field + program name
+                let addr_field_y = content_y + 4;
+                let addr_field_h: i32 = 24;
+                let addr_label = "ADDR:";
+                if let Some(f) = tf {
+                    d.draw_text_ex(f, addr_label,
+                        raylib::math::Vector2::new((term_x + 6) as f32, (addr_field_y + 4) as f32),
+                        16.0, 1.0, txt_dim);
+                } else {
+                    d.draw_text(addr_label, term_x + 6, addr_field_y + 4, 14, txt_dim);
+                }
+                // Address input box
+                let addr_box_x = term_x + 80;
+                let addr_box_w = 90;
+                let addr_border = if editor.focus == EditorFocus::Address { t_fg } else { txt_dim };
+                d.draw_rectangle(addr_box_x, addr_field_y, addr_box_w, addr_field_h, rgb(4, 8, 4));
+                d.draw_rectangle_lines(addr_box_x, addr_field_y, addr_box_w, addr_field_h, addr_border);
+                let addr_display = if editor.focus == EditorFocus::Address && (editor.cursor_blink / 20) % 2 == 0 {
+                    format!("{}|", editor.addr_text)
+                } else {
+                    format!("{} ", editor.addr_text)
+                };
+                if let Some(f) = tf {
+                    d.draw_text_ex(f, &addr_display,
+                        raylib::math::Vector2::new((addr_box_x + 4) as f32, (addr_field_y + 4) as f32),
+                        16.0, 1.0, t_fg);
+                } else {
+                    d.draw_text(&addr_display, addr_box_x + 4, addr_field_y + 4, 14, t_fg);
+                }
+
+                // Program name / source path
+                let prog_label = if editor.dirty { "  (unsaved)" } else { "" };
+                let name_display = format!("{}{}", editor.program_name, prog_label);
+                if let Some(f) = tf {
+                    d.draw_text_ex(f, &name_display,
+                        raylib::math::Vector2::new((addr_box_x + addr_box_w + 12) as f32, (addr_field_y + 4) as f32),
+                        14.0, 1.0, txt_dim);
+                } else {
+                    d.draw_text(&name_display, addr_box_x + addr_box_w + 12, addr_field_y + 4, 12, txt_dim);
+                }
+
+                // Hex editor area
+                let hex_area_y = addr_field_y + addr_field_h + 4;
+                let hex_area_h = content_h - (hex_area_y - content_y) - 28;
+                d.draw_rectangle(term_x, hex_area_y, term_w, hex_area_h, rgb(4, 8, 4));
+                d.draw_rectangle_lines(term_x, hex_area_y, term_w, hex_area_h, if editor.focus == EditorFocus::Hex { t_fg } else { txt_dim });
+
+                // Render hex text with line wrapping and cursor
+                let hex_font_size = 16.0_f32;
+                let hex_line_h = if tf.is_some() { 20 } else { 18 };
+                let hex_margin = 6;
+                let bytes_per_line = ((term_w - hex_margin * 2) / (char_w * 3)) as usize; // "XX " per byte
+                let bytes_per_line = bytes_per_line.max(1);
+
+                // Word-wrap the hex text into lines
+                let hex_tokens: Vec<&str> = editor.hex_text.split_whitespace().collect();
+                let _num_lines = (hex_tokens.len() + bytes_per_line - 1).max(1) / bytes_per_line.max(1);
+
+                // Auto-scroll to keep cursor visible
+                let cursor_token_idx = editor.hex_text[..editor.cursor.min(editor.hex_text.len())]
+                    .split_whitespace().count();
+                let cursor_line = cursor_token_idx / bytes_per_line.max(1);
+                let visible_lines = (hex_area_h / hex_line_h) as usize;
+                if cursor_line < editor.scroll {
+                    editor.scroll = cursor_line;
+                }
+                if cursor_line >= editor.scroll + visible_lines {
+                    editor.scroll = cursor_line - visible_lines + 1;
+                }
+
+                for line_idx in 0..visible_lines {
+                    let token_start = (editor.scroll + line_idx) * bytes_per_line;
+                    if token_start >= hex_tokens.len() { break; }
+                    let token_end = (token_start + bytes_per_line).min(hex_tokens.len());
+                    let line_str: String = hex_tokens[token_start..token_end].join(" ");
+                    let row_y = hex_area_y + hex_margin + line_idx as i32 * hex_line_h;
+                    if row_y + hex_line_h > hex_area_y + hex_area_h { break; }
+
+                    // Address prefix for each line
+                    if let Ok(addr) = editor.to_address() {
+                        let line_addr = addr.wrapping_add((token_start * 1) as u16); // 1 byte per token
+                        let prefix = format!("{:04X}: ", line_addr);
+                        if let Some(f) = tf {
+                            d.draw_text_ex(f, &prefix,
+                                raylib::math::Vector2::new((term_x + hex_margin) as f32, row_y as f32),
+                                hex_font_size, 1.0, txt_dim);
+                        } else {
+                            d.draw_text(&prefix, term_x + hex_margin, row_y, 14, txt_dim);
+                        }
+                    }
+
+                    let prefix_w = 6 * char_w; // "XXXX: " = 6 chars
+                    if let Some(f) = tf {
+                        d.draw_text_ex(f, &line_str,
+                            raylib::math::Vector2::new((term_x + hex_margin + prefix_w) as f32, row_y as f32),
+                            hex_font_size, 1.0, t_fg);
+                    } else {
+                        d.draw_text(&line_str, term_x + hex_margin + prefix_w, row_y, 14, t_fg);
+                    }
+                }
+
+                // Cursor indicator
+                if editor.focus == EditorFocus::Hex && (editor.cursor_blink / 15) % 2 == 0 {
+                    // Find the pixel position of the cursor
+                    let text_before_cursor = &editor.hex_text[..editor.cursor.min(editor.hex_text.len())];
+                    let tokens_before = text_before_cursor.split_whitespace().count();
+                    let cursor_line = tokens_before / bytes_per_line.max(1);
+                    let cursor_col = tokens_before % bytes_per_line.max(1);
+                    // Also count partial token position
+                    let _partial = text_before_cursor.len() - text_before_cursor.trim_end().len();
+                    let prefix_w = 6 * char_w;
+                    let cursor_x = term_x + hex_margin + prefix_w + cursor_col as i32 * char_w * 3;
+                    let cursor_y = hex_area_y + hex_margin + (cursor_line as i32 - editor.scroll as i32) * hex_line_h;
+                    if cursor_y >= hex_area_y && cursor_y < hex_area_y + hex_area_h {
+                        d.draw_rectangle(cursor_x, cursor_y, 2, hex_line_h, t_fg);
+                    }
+                }
+
+                // Byte count display
+                let byte_count = editor.hex_text.split_whitespace().count();
+                let count_str = format!("{} bytes", byte_count);
+                if let Some(f) = tf {
+                    d.draw_text_ex(f, &count_str,
+                        raylib::math::Vector2::new((term_x + term_w - 100) as f32, (addr_field_y + 4) as f32),
+                        14.0, 1.0, txt_dim);
+                } else {
+                    d.draw_text(&count_str, term_x + term_w - 100, addr_field_y + 4, 12, txt_dim);
+                }
+
+                // Help bar at the bottom of the code editor
+                let help_y = hex_area_y + hex_area_h + 4;
+                let help_text = "F2 load file   F3 save   Ctrl+Enter run   Tab addr/hex   F6 console";
+                if let Some(f) = tf {
+                    d.draw_text_ex(f, help_text,
+                        raylib::math::Vector2::new((term_x + 6) as f32, help_y as f32),
+                        12.0, 1.0, txt_dim);
+                } else {
+                    d.draw_text(help_text, term_x + 6, help_y, 11, txt_dim);
                 }
             }
         }

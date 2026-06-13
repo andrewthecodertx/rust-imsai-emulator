@@ -225,8 +225,31 @@ cargo run --features gui --bin imsai-gui -- --program programs/hello-world.json
 | F2                              | Open program loader (pick a `.json` from `programs/`) |
 | F3                              | Save current memory region as a front panel program   |
 | F4                              | Mount a disk image in drive A                         |
+| F6                              | Toggle between CONSOLE and CODE editor tabs          |
 | R key                           | Cold reset (clear RAM, delete `imsai_memory.json`)    |
 | Keyboard (when running)         | Send characters to console UART                       |
+
+### Code Editor (F6)
+
+The CODE tab in the CRT terminal area provides a hex code editor for typing programs directly instead of toggling front panel switches.
+
+- **Address field**: 4-digit hex address where the program loads. Tab switches focus between address and hex body.
+- **Hex body**: Type space-separated hex bytes (e.g., `3E 41 D3 00 C3 08 00`). Spaces are auto-inserted after every two hex digits.
+- **F2** loads a `.json` program file into the editor (instead of running it).
+- **F3** saves the editor contents as a `.json` program file.
+- **Ctrl+Enter** loads the hex bytes into memory at the specified address and starts execution (switches to CONSOLE to show output).
+
+| Key             | Action                                            |
+| --------------- | ------------------------------------------------- |
+| F6              | Toggle CONSOLE / CODE tabs                        |
+| Tab             | Switch focus: address field ↔ hex body            |
+| Ctrl+Enter      | Load hex into memory and run                      |
+| F2              | Load `.json` program into editor                  |
+| F3              | Save editor contents as `.json` program           |
+| 0-9, A-F       | Type hex digits (auto-space after byte boundary)  |
+| Backspace       | Delete previous character                          |
+| Left/Right      | Move cursor through hex text                      |
+| Home/End        | Jump to start/end of hex text                     |
 
 ### Terminal Mode (CLI)
 
