@@ -23,6 +23,119 @@ Emulates the IMSAI 8080 hardware: Intel 8080 CPU, 64KB RAM, Tarbell FD1771 flopp
 - IMSAI 8080 front panel (toggle switches, LEDs, function buttons)
 - S-100 bus connecting all components
 
+## Hardware Reference
+
+### Memory Map
+
+The full 64K address space is RAM. There is no ROM, no BIOS, no firmware.
+
+| Address Range | Contents |
+| ------------- | -------- |
+| 0x0000-0xFFFF | 64K RAM (0xFF on power-up, floating bus) |
+
+Memory initializes to 0xFF, matching the real IMSAI's floating bus. Programs should not assume memory is zeroed.
+
+### I/O Port Map
+
+The S-100 bus dispatches I/O by port number. Unclaimed ports return 0xFF on read and ignore writes.
+
+| Port(s) | Card | Register |
+| ------- | ---- | -------- |
+| 0x00 | SIO-2 | Channel A data (console in/out) |
+| 0x01 | SIO-2 | Channel A status/command |
+| 0x02 | SIO-2 | Channel B data |
+| 0x03 | SIO-2 | Channel B command/status |
+| 0x48 | Tarbell | FD1771 status (read) / command (write) |
+| 0x49 | Tarbell | FD1771 track register |
+| 0x4A | Tarbell | FD1771 sector register |
+| 0x4B | Tarbell | FD1771 data register |
+| 0x79 | SIO-2 | Channel A status alias |
+| 0x7B | SIO-2 | Channel A data alias |
+| 0xF8 | Tarbell | FD1771 status/command alias |
+| 0xF9 | Tarbell | FD1771 track register alias |
+| 0xFA | Tarbell | FD1771 sector register alias |
+| 0xFB | Tarbell | FD1771 data register alias |
+| 0xFC | Tarbell | DRQ/wait status (bit 7) |
+| 0xFD | Tarbell | Fixed 0x00 |
+| 0xFF | Tarbell | Fixed 0x03 |
+
+### Console UART (Intel 8251A)
+
+The console is an Intel 8251A UART at ports 0x00 and 0x01. It must be initialized before use.
+
+**Port 0x00 — Data**: Read to receive a character, write to send one.
+
+**Port 0x01 — Status/Command**: Read for status, write for mode/command bytes.
+
+Status bits:
+
+| Bit | Value | Meaning |
+| --- | ----- | ------- |
+| 0 | 0x01 | TxRDY — transmitter ready to accept a character |
+| 1 | 0x02 | RxRDY — a character is available to read |
+
+**TxRDY is bit 0 (0x01), not bit 1.** Using `ANI 0x02` when you mean `ANI 0x01` checks the wrong flag and hangs.
+
+Initialization sequence:
+
+```
+MVI A, 0x4E    ; mode: 8 data bits, no parity, 1 stop bit, 16x baud
+OUT  0x01      ;
+MVI A, 0x05    ; command: enable TX and RX
+OUT  0x01      ;
+```
+
+### Floppy Controller (WD FD1771)
+
+The Tarbell 1011 board wraps the FD1771 at ports 0x48-0x4B (aliases at 0xF8-0xFB). Some disk BIOS versions use the aliases.
+
+| Offset | Read | Write |
+| ------ | ---- | ----- |
+| +0 (0x48) | Status | Command |
+| +1 (0x49) | Track register | Track register |
+| +2 (0x4A) | Sector register | Sector register |
+| +3 (0x4B) | Data register | Data register |
+
+Disk format: 8" SSSD, 77 tracks, 26 sectors per track, 128 bytes per sector (256,256 bytes total). Sectors are numbered 1-26 (physical). Tracks 0-1 are reserved for the system.
+
+Port 0xFC bit 7 is DRQ (data request). Port 0xFD always reads 0x00. Port 0xFF always reads 0x03.
+
+### Front Panel
+
+The front panel is **not on the I/O bus**. It directly accesses the address bus, data bus, and CPU control lines — it works even with no software loaded.
+
+**LEDs:**
+
+| LED | Meaning |
+| --- | ------- |
+| ADDRESS (16) | Current address bus value |
+| DATA (8) | Current data bus value |
+| PROGRAMMED OUTPUT (8) | Latched from data bus on every OUT instruction (active-low on real hardware, inverted in emulator so 1 = LED on) |
+| RUN | CPU is executing |
+| WAIT | CPU is in wait state |
+| M1 | Instruction fetch cycle |
+| HLTA | CPU halted (HLT instruction) |
+| INT | Interrupt pending |
+| HLDA | Hold acknowledge |
+| MEMR | Memory read active |
+| WO (!MWRT) | Write-output (lit when NOT writing) |
+| IOR | I/O read active |
+| IOW | I/O write active |
+| POWER | System powered on |
+
+**Switches:**
+
+| Switch | Function |
+| ------ | -------- |
+| ADDRESS (16) | Set address for examine/deposit/RUN |
+| DATA (8) | Set byte for deposit |
+| RUN/STOP | Toggle CPU execution |
+| SINGLE STEP | Execute one instruction then halt |
+| EXAMINE | Read byte at address switches into data LEDs |
+| DEPOSIT | Write data switches into memory at address switches |
+| EX NXT | Increment address then examine |
+| DEP NXT | Increment address then deposit |
+
 ## Front Panel GUI
 
 The `imsai-gui` binary provides a visual raylib front panel. It needs the `gui`
