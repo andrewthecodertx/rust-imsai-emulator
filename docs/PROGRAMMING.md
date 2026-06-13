@@ -4,6 +4,8 @@ This guide explains how to write, load, and run programs on the IMSAI 8080
 emulator. Programs are Intel 8080 machine code that talks directly to the
 hardware through I/O ports.
 
+For the instruction set, see the [8080 opcode table](https://pastraiser.com/cpu/i8080/i8080_opcodes.html) or the official [Intel 8080 Programmer's Manual (PDF)](https://altairclone.com/downloads/manuals/8080%20Programmers%20Manual.pdf).
+
 ## Hardware You Can Program
 
 | Component                        | I/O Ports                          | Purpose                   |
