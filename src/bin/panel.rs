@@ -1132,22 +1132,24 @@ fn main() {
                     && m.x >= term_x as f32
                 {
                     editor.focus = EditorFocus::Hex;
-                    // Compute which byte was clicked
+                    // Compute which byte was clicked. Use the float advance
+                    // (matching the renderer) so the hit-test lines up with
+                    // the rendered glyphs.
                     let (char_w, _) = if let Some(ref f) = term_font {
                         let m = f.measure_text("M", 16.0, 0.0);
-                        (m.x as i32, 20)
+                        (m.x, 20.0)
                     } else {
-                        (11, 18)
+                        (11.0, 18.0)
                     };
-                    let hex_margin = 6;
-                    let prefix_w = 6 * char_w; // "XXXX: "
-                    let byte_cell_w = char_w * 3; // "XX " per byte
-                    let click_x = m.x as i32 - term_x - hex_margin - prefix_w;
-                    let click_y = m.y as i32 - hex_area_y - 4; // small top margin
+                    let hex_margin = 6.0;
+                    let prefix_w = 6.0 * char_w; // "XXXX: "
+                    let byte_cell_w = char_w * 3.0; // "XX " per byte
+                    let click_x = m.x - term_x as f32 - hex_margin - prefix_w;
+                    let click_y = m.y - hex_area_y as f32 - 4.0; // small top margin
                     let bpl = editor.bytes_per_line.max(1);
-                    if click_x >= 0 && click_y >= 0 {
+                    if click_x >= 0.0 && click_y >= 0.0 {
                         let col = (click_x / byte_cell_w) as u16;
-                        let line = (click_y / 20) as u16; // ~20px per line
+                        let line = (click_y / 20.0) as u16; // ~20px per line
                         let offset =
                             (editor.scroll as u16 + line) * bpl as u16 + col.min(bpl as u16 - 1);
                         let max_offset = 0xFFFFu16.wrapping_sub(editor.base_addr);
@@ -1704,11 +1706,19 @@ fn main() {
 
             CrtTab::Code => {
                 // === Memory Editor view ===
+                // Measure the monospace advance. Must match how the glyphs are actually
+                // drawn: draw_text_ex is called with spacing 1.0, so measure
+                // with the same spacing. Measure a long string and divide:
+                // measure_text("M") returns the glyph's own advance (~8px),
+                // but the real per-character advance in a rendered string is
+                // larger (~9.16px) because each glyph is followed by spacing,
+                // so using the single-glyph width undershoots and the cursor
+                // drifts left into the ASCII column.
                 let (char_w, _char_h) = if let Some(f) = tf {
-                    let m = f.measure_text("M", 16.0, 0.0);
-                    (m.x, 20.0)
+                    let m = f.measure_text("MMMMMMMMMMMM", 16.0, 1.0);
+                    (m.x / 12.0, 20.0)
                 } else {
-                    (11.0, 18.0)
+                    (12.0, 18.0)
                 };
 
                 // Compute bytes per line from available width.
@@ -1842,12 +1852,35 @@ fn main() {
                     let bpl = bytes_per_line.max(1) as u16;
                     let cursor_line = (editor.cursor_offset / bpl) as i32 - editor.scroll as i32;
                     let cursor_col = editor.cursor_offset % bpl;
-                    // Cursor X: prefix + column * 3 chars (2 hex + space) + nibble offset within byte
-                    let nibble_offset = if editor.nibble == 0 { 0.0 } else { char_w };
-                    let cursor_x = term_x as f32 + hex_margin + prefix_w + cursor_col as f32 * char_w * 3.0 + nibble_offset;
+                    // Place the highlight by measuring the exact prefix of
+                    // the line string that is actually rendered. The line is
+                    // "XXXX: " + "XX XX XX ...", so the cursor nibble sits at
+                    // char index 6 + col*3 + nibble. Measuring that prefix in
+                    // one call matches the glyphs exactly (measuring prefix
+                    // and hex body separately double-counts inter-glyph
+                    // spacing and drifts the cursor right).
+                    let line_addr = base.wrapping_add((editor.scroll * bytes_per_line as usize + cursor_line as usize * bytes_per_line as usize) as u16);
+                    let mut line = format!("{:04X}: ", line_addr);
+                    for b in 0..bytes_per_line {
+                        if b > 0 { line.push(' '); }
+                        let addr = line_addr.wrapping_add(b as u16);
+                        line.push_str(&format!("{:02X}", emu.bus.mem_read(addr)));
+                    }
+                    let char_idx = 6 + cursor_col as usize * 3 + editor.nibble as usize;
+                    let (cursor_x, cursor_w) = if let Some(f) = tf {
+                        let prefix = &line[..char_idx.min(line.len())];
+                        let x = term_x as f32 + hex_margin + f.measure_text(prefix, hex_font_size, 1.0).x;
+                        let w = f.measure_text("X", hex_font_size, 1.0).x;
+                        (x, w)
+                    } else {
+                        let prefix_w = 6.0 * char_w;
+                        let x = term_x as f32 + hex_margin + prefix_w + cursor_col as f32 * char_w * 3.0
+                            + if editor.nibble == 0 { 0.0 } else { char_w };
+                        (x, char_w)
+                    };
                     let cursor_y = hex_area_y as f32 + hex_margin + cursor_line as f32 * hex_line_h;
                     if cursor_y >= hex_area_y as f32 && cursor_y < (hex_area_y + hex_area_h) as f32 {
-                        d.draw_rectangle(cursor_x as i32, cursor_y as i32, char_w as i32, hex_line_h as i32,
+                        d.draw_rectangle(cursor_x as i32, cursor_y as i32, cursor_w as i32, hex_line_h as i32,
                             raylib::color::Color { r: 50, g: 255, b: 50, a: 80 });
                     }
                 }
