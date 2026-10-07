@@ -1706,23 +1706,22 @@ fn main() {
                 // === Memory Editor view ===
                 let (char_w, _char_h) = if let Some(f) = tf {
                     let m = f.measure_text("M", 16.0, 0.0);
-                    (m.x as i32, 20)
+                    (m.x, 20.0)
                 } else {
-                    (11, 18)
+                    (11.0, 18.0)
                 };
 
                 // Compute bytes per line from available width.
-                // Format: "XXXX: " (6 chars) + N * "XX " (3 chars each) + " " + ASCII (N chars)
-                // We need at least the addr prefix + hex + gap + ASCII. For 16 bytes/line:
-                //   6 + 16*3 + 2 + 16 = 72 chars. At 11px/char that's ~792px — fits 1264px width.
-                // At smaller windows, fall back to 8 bytes/line.
+                // Layout per line: "XXXX: " (6 chars) + N * "XX " (3 chars)
+                // + "  " (2-char gap) + N ASCII chars.
+                //   total = 6 + N*3 + 2 + N = 8 + 4N chars.
+                // Solve for the largest N (capped at 16) that fits.
                 let hex_font_size = 16.0_f32;
-                let hex_line_h = if tf.is_some() { 20 } else { 18 };
-                let hex_margin = 6;
-                // Calculate how many bytes fit: prefix(6) + N*3(hex) + 2(gap) + N(ascii)
-                let available = term_w - hex_margin * 2;
-                let bpl_16 = available / (char_w * 4 + 2); // rough: each byte needs ~4 chars (3 hex + 1 ascii) + shared prefix
-                let bytes_per_line = if bpl_16 >= 16 { 16 } else if bpl_16 >= 8 { 8 } else { bpl_16.max(1) };
+                let hex_line_h = if tf.is_some() { 20.0 } else { 18.0 };
+                let hex_margin = 6.0;
+                let available = term_w as f32 - hex_margin * 2.0;
+                let max_n = ((available - 8.0 * char_w) / (4.0 * char_w)).floor() as i32;
+                let bytes_per_line = if max_n >= 16 { 16 } else if max_n >= 8 { 8 } else { max_n.max(1) };
                 editor.bytes_per_line = bytes_per_line as usize;
 
                 let cpu_running = emu.panel.is_running() && !emu.cpu.halted;
@@ -1781,25 +1780,25 @@ fn main() {
 
                 // Render hex dump from live memory
                 let base = editor.base_addr;
-                let visible_lines = (hex_area_h / hex_line_h) as usize;
-                let prefix_w = 6 * char_w; // "XXXX: "
+                let visible_lines = (hex_area_h as f32 / hex_line_h) as usize;
+                let prefix_w = 6.0 * char_w; // "XXXX: "
 
                 // ASCII column starts after the hex bytes + a 2-char gap
-                let ascii_x_offset = prefix_w + bytes_per_line as i32 * char_w * 3 + char_w * 2;
+                let ascii_x_offset = prefix_w + bytes_per_line as f32 * char_w * 3.0 + char_w * 2.0;
 
                 for line_idx in 0..visible_lines {
                     let line_addr = base.wrapping_add((editor.scroll * bytes_per_line as usize + line_idx as usize * bytes_per_line as usize) as u16);
-                    let row_y = hex_area_y + hex_margin + line_idx as i32 * hex_line_h;
-                    if row_y + hex_line_h > hex_area_y + hex_area_h { break; }
+                    let row_y = hex_area_y as f32 + hex_margin + line_idx as f32 * hex_line_h;
+                    if row_y + hex_line_h > (hex_area_y + hex_area_h) as f32 { break; }
 
                     // Address prefix
                     let prefix = format!("{:04X}: ", line_addr);
                     if let Some(f) = tf {
                         d.draw_text_ex(f, &prefix,
-                            raylib::math::Vector2::new((term_x + hex_margin) as f32, row_y as f32),
+                            raylib::math::Vector2::new(term_x as f32 + hex_margin, row_y),
                             hex_font_size, 1.0, txt_dim);
                     } else {
-                        d.draw_text(&prefix, term_x + hex_margin, row_y, 14, txt_dim);
+                        d.draw_text(&prefix, (term_x as f32 + hex_margin) as i32, row_y as i32, 14, txt_dim);
                     }
 
                     // Hex bytes
@@ -1822,19 +1821,19 @@ fn main() {
 
                     if let Some(f) = tf {
                         d.draw_text_ex(f, &hex_str,
-                            raylib::math::Vector2::new((term_x + hex_margin + prefix_w) as f32, row_y as f32),
+                            raylib::math::Vector2::new(term_x as f32 + hex_margin + prefix_w, row_y),
                             hex_font_size, 1.0, t_fg);
                     } else {
-                        d.draw_text(&hex_str, term_x + hex_margin + prefix_w, row_y, 14, t_fg);
+                        d.draw_text(&hex_str, (term_x as f32 + hex_margin + prefix_w) as i32, row_y as i32, 14, t_fg);
                     }
 
                     // ASCII column
                     if let Some(f) = tf {
                         d.draw_text_ex(f, &ascii_str,
-                            raylib::math::Vector2::new((term_x + hex_margin + ascii_x_offset) as f32, row_y as f32),
+                            raylib::math::Vector2::new(term_x as f32 + hex_margin + ascii_x_offset, row_y),
                             hex_font_size, 1.0, txt_dim);
                     } else {
-                        d.draw_text(&ascii_str, term_x + hex_margin + ascii_x_offset, row_y, 14, txt_dim);
+                        d.draw_text(&ascii_str, (term_x as f32 + hex_margin + ascii_x_offset) as i32, row_y as i32, 14, txt_dim);
                     }
                 }
 
@@ -1844,11 +1843,11 @@ fn main() {
                     let cursor_line = (editor.cursor_offset / bpl) as i32 - editor.scroll as i32;
                     let cursor_col = editor.cursor_offset % bpl;
                     // Cursor X: prefix + column * 3 chars (2 hex + space) + nibble offset within byte
-                    let nibble_offset = if editor.nibble == 0 { 0 } else { char_w };
-                    let cursor_x = term_x + hex_margin + prefix_w + cursor_col as i32 * char_w * 3 + nibble_offset;
-                    let cursor_y = hex_area_y + hex_margin + cursor_line * hex_line_h;
-                    if cursor_y >= hex_area_y && cursor_y < hex_area_y + hex_area_h {
-                        d.draw_rectangle(cursor_x, cursor_y, char_w, hex_line_h,
+                    let nibble_offset = if editor.nibble == 0 { 0.0 } else { char_w };
+                    let cursor_x = term_x as f32 + hex_margin + prefix_w + cursor_col as f32 * char_w * 3.0 + nibble_offset;
+                    let cursor_y = hex_area_y as f32 + hex_margin + cursor_line as f32 * hex_line_h;
+                    if cursor_y >= hex_area_y as f32 && cursor_y < (hex_area_y + hex_area_h) as f32 {
+                        d.draw_rectangle(cursor_x as i32, cursor_y as i32, char_w as i32, hex_line_h as i32,
                             raylib::color::Color { r: 50, g: 255, b: 50, a: 80 });
                     }
                 }
