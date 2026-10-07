@@ -168,7 +168,7 @@ fn default_programs_dir() -> PathBuf {
 }
 
 /// Directories to scan for disk images (.img/.dsk) in the F4 mount picker:
-/// the current directory, a `disks/` subdir, and the executable's directory.
+/// the current directory, a `disks/ subdir, and the executable's directory.
 fn disk_search_dirs() -> Vec<PathBuf> {
     let mut dirs = vec![PathBuf::from("."), PathBuf::from("disks")];
     if let Ok(exe) = env::current_exe() {
@@ -178,6 +178,31 @@ fn disk_search_dirs() -> Vec<PathBuf> {
         }
     }
     dirs
+}
+
+/// Scan `programs/` for loadable .json panel programs.
+///
+/// Returns `None` if the directory can't be found or read, `Some(empty)`
+/// if it exists but has no loadable programs, or `Some(files)` otherwise.
+/// Used by the F2 load picker.
+fn list_program_files() -> Option<Vec<PickerEntry>> {
+    let prog_dir = default_programs_dir();
+    let entries_fs = fs::read_dir(&prog_dir).ok()?;
+    let mut files: Vec<PickerEntry> = entries_fs
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().extension().map_or(false, |ext| ext == "json"))
+        .filter_map(|e| {
+            let path = e.path();
+            let entry = load_program_file(&path).ok()?;
+            Some(PickerEntry {
+                name: entry.name.clone(),
+                description: entry.description.clone(),
+                path,
+            })
+        })
+        .collect();
+    files.sort_by(|a, b| a.name.cmp(&b.name));
+    Some(files)
 }
 
 use raylib::consts::{KeyboardKey, MouseButton, TextureFilter};
@@ -584,26 +609,12 @@ fn main() {
         }
         // F2: Open load picker (list .json programs in programs/)
         if rl.is_key_pressed(KeyboardKey::KEY_F2) {
-            let prog_dir = default_programs_dir();
-            if let Ok(entries_fs) = fs::read_dir(&prog_dir) {
-                let mut files: Vec<PickerEntry> = entries_fs
-                    .filter_map(|e| e.ok())
-                    .filter(|e| e.path().extension().map_or(false, |ext| ext == "json"))
-                    .filter_map(|e| {
-                        let path = e.path();
-                        let entry = load_program_file(&path).ok()?;
-                        Some(PickerEntry {
-                            name: entry.name.clone(),
-                            description: entry.description.clone(),
-                            path,
-                        })
-                    })
-                    .collect();
-                files.sort_by(|a, b| a.name.cmp(&b.name));
-                if files.is_empty() {
+            match list_program_files() {
+                Some(files) if files.is_empty() => {
                     status_msg = "No .json programs in programs/".to_string();
                     status_msg_timer = 180;
-                } else {
+                }
+                Some(files) => {
                     picker = PickerState::List {
                         kind: PickerKind::Program,
                         entries: files,
@@ -611,9 +622,10 @@ fn main() {
                         selected: 0,
                     };
                 }
-            } else {
-                status_msg = "programs/ directory not found".to_string();
-                status_msg_timer = 180;
+                None => {
+                    status_msg = "programs/ directory not found".to_string();
+                    status_msg_timer = 180;
+                }
             }
         }
         // F4: Open disk picker (list .img disk images and mount into drive A)
@@ -701,16 +713,19 @@ fn main() {
                         });
                     }
                 }
-                // Mouse click to select entry
+                // Mouse click to select entry (and load on release — matches the
+                // keyboard Enter behavior). Coordinates must match the picker
+                // drawn at overlay_x=200, overlay_y=150, w=680, h=420
+                // below, with list_y = overlay_y + 52 and row_h = 40.
                 if rl.is_mouse_button_pressed(MouseButton::MOUSE_BUTTON_LEFT) {
                     let m = mouse_layout;
-                    let overlay_x: i32 = 100;
+                    let overlay_x: i32 = 200;
                     let overlay_y: i32 = 150;
-                    let overlay_w: i32 = 540;
-                    let overlay_h: i32 = 400;
-                    let list_y = overlay_y + 50;
-                    let list_h = overlay_h - 68;
-                    let row_h: i32 = 36;
+                    let overlay_w: i32 = 680;
+                    let overlay_h: i32 = 420;
+                    let list_y = overlay_y + 52;
+                    let list_h = overlay_h - 72;
+                    let row_h: i32 = 40;
                     if m.x >= overlay_x as f32
                         && m.x < (overlay_x + overlay_w) as f32
                         && m.y >= list_y as f32
@@ -720,6 +735,12 @@ fn main() {
                         let new_sel = *scroll + click_row;
                         if new_sel >= 0 && (new_sel as usize) < entries.len() {
                             *selected = new_sel;
+                            if let Some(entry) = entries.get(*selected as usize).cloned() {
+                                picker_action = Some(match kind {
+                                    PickerKind::Program => PickerAction::Load(entry.path.clone()),
+                                    PickerKind::Disk => PickerAction::Mount(entry.path.clone()),
+                                });
+                            }
                         }
                     }
                 }
