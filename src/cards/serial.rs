@@ -59,8 +59,8 @@ impl SerialCard {
     /// Advance the serial line by one tick: pull one waiting keyboard byte into
     /// Channel A's RX register (only when RX is enabled and the previous byte
     /// has been read). TX is instantaneous, so there's nothing to drain here.
-    /// Driven once per instruction by `Imsai8080::step`, so every run path
-    /// (TUI, GUI, scripted, trace) gets keyboard input without special-casing.
+    /// Driven once per instruction by `Imsai8080::step`, so the GUI gets
+    /// keyboard input without special-casing.
     pub fn tick(&mut self) {
         if self.channel_a.is_rx_enabled() && !self.channel_a.is_rx_ready() {
             if let Some(ch) = self.keyboard.read_char() {
@@ -70,8 +70,8 @@ impl SerialCard {
     }
 
     /// Drain Channel A's transmitted bytes into the internal video buffer.
-    /// Used by the terminal frontend, which reads back `video().get_display_string()`.
-    /// (The raylib panel takes the bytes via `take_output()` and renders them itself.)
+    /// (The raylib panel takes the bytes via `take_output()` and renders
+    /// them itself, so this is only used by `get_display_string()`.)
     pub fn flush_to_video(&mut self) {
         let output = self.channel_a.take_output();
         for &byte in &output {

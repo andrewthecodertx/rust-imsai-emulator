@@ -45,16 +45,12 @@ jobs:
         if: runner.os == 'Windows'
         run: choco install cmake --installargs '"ADD_CMAKE_TO_PATH=System"'
 
-      - name: Build CLI
-        run: cargo build --release --bin imsai-cli --target ${{ matrix.target }}
-
       - name: Build GUI
-        run: cargo build --release --bin imsai-gui --features gui --target ${{ matrix.target }}
+        run: cargo build --release --bin imsai-gui --target ${{ matrix.target }}
 
       - name: Strip binaries (Linux/macOS)
         if: runner.os != 'Windows'
         run: |
-          strip target/${{ matrix.target }}/release/imsai-cli
           strip target/${{ matrix.target }}/release/imsai-gui
 
       - name: Package archive (Linux/macOS)
@@ -62,10 +58,10 @@ jobs:
         run: |
           cd target/${{ matrix.target }}/release
           mkdir -p ../../../staging
-          cp imsai-cli imsai-gui ../../../staging/
+          cp imsai-gui ../../../staging/
           cp -r ${{ github.workspace }}/programs ${{ github.workspace }}/binaries ${{ github.workspace }}/disks ../../../staging/
           cd ../../../staging
-          tar czf ${{ github.workspace }}/imsai-8080-emulator-${{ matrix.target }}.tar.gz imsai-cli imsai-gui programs binaries disks
+          tar czf ${{ github.workspace }}/imsai-8080-emulator-${{ matrix.target }}.tar.gz imsai-gui programs binaries disks
 
       - name: Package archive (Windows)
         if: runner.os == 'Windows'
@@ -73,9 +69,9 @@ jobs:
         run: |
           cd target\${{ matrix.target }}\release
           New-Item -ItemType Directory -Force -Path ..\..\..\staging
-          Copy-Item imsai-cli.exe, imsai-gui.exe ..\..\..\staging\
+          Copy-Item imsai-gui.exe ..\..\..\staging\
           Copy-Item -Recurse ${{ github.workspace }}\programs, ${{ github.workspace }}\binaries, ${{ github.workspace }}\disks ..\..\..\staging\
-          Compress-Archive -Path ..\..\..\staging\imsai-cli.exe, ..\..\..\staging\imsai-gui.exe, ..\..\..\staging\programs, ..\..\..\staging\binaries, ..\..\..\staging\disks -DestinationPath ..\..\..\imsai-8080-emulator-${{ matrix.target }}.zip
+          Compress-Archive -Path ..\..\..\staging\imsai-gui.exe, ..\..\..\staging\programs, ..\..\..\staging\binaries, ..\..\..\staging\disks -DestinationPath ..\..\..\imsai-8080-emulator-${{ matrix.target }}.zip
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

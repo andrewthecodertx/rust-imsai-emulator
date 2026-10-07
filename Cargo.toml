@@ -2,34 +2,26 @@
 name = "rust-imsai-emulator"
 version = "0.9.3"
 edition = "2021"
-# Two binaries (imsai-cli, imsai-gui). Without this, a bare `cargo run`
-# errors with "could not determine which binary to run". Default to the
-# terminal CLI; use `cargo run --bin imsai-gui` for the raylib front panel.
-default-run = "imsai-cli"
 
 [lib]
 name = "rust_imsai_emulator"
 path = "src/lib.rs"
 doctest = false
 
-[[bin]]
-name = "imsai-cli"
-path = "src/main.rs"
-
-# Front panel GUI (raylib) - optional, requires the raylib C library. Gated
-# behind the `gui` feature so the library and imsai-cli build without the
-# native raylib toolchain: build it with `cargo build --features gui`.
+# Front panel GUI (raylib). raylib is an optional dep gated behind the `gui`
+# feature, which is a default feature, so `cargo build`/`cargo run` build the
+# GUI. Use `--no-default-features` for a fast headless library-only build/test
+# (no raylib C library needed).
 [[bin]]
 name = "imsai-gui"
 path = "src/bin/panel.rs"
 required-features = ["gui"]
 
 [features]
-default = []
+default = ["gui"]
 gui = ["dep:raylib"]
 
 [dependencies]
-crossterm = "0.29.0"
 intel8080 = { git = "https://github.com/andrewthecodertx/rust-intel8080-emulator", rev = "aaea08fdeba555df4387e6944bdfa48946cf490f" }
 raylib = { version = "5.5.1", optional = true }
 serde = { version = "1", features = ["derive"] }

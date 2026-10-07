@@ -6,13 +6,13 @@ A Rust emulator for the IMSAI 8080 with a Tarbell FD1771 floppy controller and r
 
 ## Downloads
 
-Pre-built binaries for Linux, macOS, and Windows are available on the [releases page](https://github.com/andrewthecodertx/rust-imsai-emulator/releases/latest). Each archive contains both `imsai-cli` (terminal mode) and `imsai-gui` (front panel).
+Pre-built binaries for Linux, macOS, and Windows are available on the [releases page](https://github.com/andrewthecodertx/rust-imsai-emulator/releases/latest). Each archive contains `imsai-gui` (the raylib front panel), plus the `programs/`, `binaries/`, and `disks/` asset directories.
 
 ## What It Does
 
-Emulates the IMSAI 8080 hardware: Intel 8080 CPU, 64KB RAM, Tarbell FD1771 floppy disk controller, and IMSAI SIO-2 dual serial board. Supports interactive terminal mode (CLI) and a visual front panel GUI with a live hex memory editor.
+Emulates the IMSAI 8080 hardware: Intel 8080 CPU, 64KB RAM, Tarbell FD1771 floppy disk controller, and IMSAI SIO-2 dual serial board, with a visual raylib front panel (toggle switches, LEDs, console display) and a live hex memory editor.
 
-**Current status**: Boots and runs programs loaded via `--load` or `--program`. Terminal mode provides interactive keyboard input and console output. Disk images can be mounted and the FD1771 controller is modeled, but there is no disk boot loader yet.
+**Current status**: Boots and runs programs loaded via `--load` or `--program`. Disk images can be mounted and the FD1771 controller is modeled, but there is no disk boot loader yet.
 
 ## Hardware Emulated
 
@@ -154,11 +154,11 @@ The front panel is **not on the I/O bus**. It directly accesses the address bus,
 ## Front Panel GUI
 
 The `imsai-gui` binary provides a visual raylib front panel. It needs the `gui`
-feature (raylib is an optional dependency, so the terminal CLI builds without
-the raylib C library):
+feature (raylib is an optional dependency, so the library builds without the
+native raylib C library):
 
 ```bash
-cargo run --features gui --bin imsai-gui
+cargo run --bin imsai-gui
 ```
 
 Defaults to empty memory (all addresses = 0xFF), matching a powered-on IMSAI with no software. Use the program loader (F2) or command-line flags to load software before pressing F5 to run.
@@ -205,10 +205,10 @@ The `load` action writes bytes directly into memory without toggling switches �
 
 ```bash
 # Run the UART test program
-cargo run --features gui --bin imsai-gui -- --program programs/uart-test.json
+cargo run --bin imsai-gui -- --program programs/uart-test.json
 
 # Run the Hello World program
-cargo run --features gui --bin imsai-gui -- --program programs/hello-world.json
+cargo run --bin imsai-gui -- --program programs/hello-world.json
 ```
 
 ### Front Panel Controls
@@ -254,53 +254,22 @@ The CODE tab in the CRT terminal area is a live hex memory viewer and editor —
 | Home/End        | Jump to start/end of current line                 |
 | Page Up/Down    | Scroll by ~10 lines                               |
 
-### Terminal Mode (CLI)
+### Running from the command line
 
 ```bash
-# From a release binary
-./imsai-cli --program programs/hello-world.json
+# Load a front panel program (.json) — starts STOPPED, press F5 to run
+cargo run --bin imsai-gui -- --program programs/hello-world.json
 
-# From source
-cargo run --bin imsai-cli -- --program programs/hello-world.json
+# Load a raw binary at a specific address
+cargo run --bin imsai-gui -- --load myprogram.bin 0x100
+
+# Mount a disk image in drive A
+cargo run --bin imsai-gui -- --disk disk.img
 ```
 
-Interactive terminal mode with keyboard input and live console output. Memory state is persisted between sessions via `imsai_memory.json`.
-
-```
-imsai-cli [OPTIONS]
-
-Mode (choose one):
-  --load <file> [addr]       Load raw binary at address (default 0x0000)
-  --program <file.json>      Load a front panel program (.json)
-  (no arguments)             Start with saved memory (or empty if first run)
-
-Options:
-  --disk <file>              Mount disk image in drive A
-  --batch, -b                Batch mode (non-interactive, 50M instructions)
-  --trace, -t                Trace every instruction
-  --vtrace, -v               Verbose trace (with I/O logging)
-  --diag, -d                 Diagnostic mode (I/O log + region tracking)
-  --step, -s                 Step trace (first 500 instructions)
-  --pctrace, -p              PC ring-buffer trace (last 8K instructions)
-  --script                   Scripted mode (captures console output)
-  --cmd "text"               Pre-load keyboard input for scripted testing
-  --speed <mhz>              Throttle the TUI to a target clock (default: host speed)
-  --help, -h                 Show this help
-```
-
-## Terminal Controls
-
-| Key       | Action                                                         |
-| --------- | -------------------------------------------------------------- |
-| Letters   | Sent as uppercase                                              |
-| Enter     | Sends CR (0x0D)                                                |
-| Backspace | Sends DEL (0x7F)                                               |
-| Tab       | Sends TAB (0x09)                                               |
-| Escape    | Sends ESC (0x1B)                                               |
-| Ctrl+key  | Sends control character (Ctrl+C = 0x03)                        |
-| F5        | Start/stop CPU execution                                       |
-| Ctrl+K    | Command mode (load, program, mount, go/run, reset, quit, help) |
-| Ctrl+D    | Exit emulator                                                  |
+The GUI starts STOPPED with empty memory (all 0xFF) unless `--program` or
+`--load` is given. Press F5 or click RUN/STOP to begin execution. Memory state
+is persisted between sessions via `imsai_memory.json` in the cwd.
 
 ## Building from Source
 

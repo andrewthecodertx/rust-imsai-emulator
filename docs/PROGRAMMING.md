@@ -152,16 +152,13 @@ output character from `A` to `B`), then runs it.
 ### Option 2: Raw Binary Files
 
 Assemble your 8080 code with any assembler (z80asm, asm80, whatever produces
-raw binary output). Load the binary directly:
+raw binary output). Load the binary directly with the GUI:
 
 ```bash
-# CLI: load binary at address 0x0000 (default)
-cargo run --bin imsai-cli -- --load myprogram.bin
+# Load binary at address 0x0000 (default)
+cargo run --bin imsai-gui -- --load myprogram.bin
 
-# CLI: load binary at a specific address
-cargo run --bin imsai-cli -- --load myprogram.bin 0x100
-
-# GUI: load binary at a specific address
+# Load binary at a specific address
 cargo run --bin imsai-gui -- --load myprogram.bin 0x100
 ```
 
@@ -187,26 +184,26 @@ be loaded again with F2.
 
 | Key | Action                                                                        |
 | --- | ----------------------------------------------------------------------------- |
-| F2  | Cycle through .json programs in the programs/ directory and load the next one |
+| F2  | Open the program picker and load a .json program into memory                 |
 | F3  | Save current memory as a program file                                         |
 | F5  | Start/stop the CPU                                                            |
-| R   | Reset to UART test program                                                    |
+| R   | Cold reset (clear RAM, delete saved state)                                    |
 
-### From the CLI
+### From the command line
 
 ```bash
-# Interactive terminal with a program
-./target/release/imsai-cli --program programs/hello-world.json
+# Load a front panel program (.json) — starts STOPPED, press F5 to run
+cargo run --bin imsai-gui -- --program programs/hello-world.json
 
-# Interactive terminal with a raw binary
-./target/release/imsai-cli --load myprogram.bin 0x100
+# Load a raw binary at a specific address
+cargo run --bin imsai-gui -- --load myprogram.bin 0x100
 
-# Batch mode (50M instructions, no TTY needed)
-./target/release/imsai-cli --program programs/hello-world.json --batch
-
-# Scripted test with pre-loaded keyboard input
-./target/release/imsai-cli --program programs/hello-world.json --script --cmd "DIR\r"
+# Mount a disk image in drive A
+cargo run --bin imsai-gui -- --disk disk.img
 ```
+
+The GUI starts STOPPED with empty memory (all 0xFF) unless `--program` or
+`--load` is given. Press F5 or click RUN/STOP to begin execution.
 
 ## Memory Map
 

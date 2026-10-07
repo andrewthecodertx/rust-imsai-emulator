@@ -17,7 +17,7 @@ enum CrtTab {
 
 /// State for the hex memory editor panel.
 ///
-/// The editor is a live lens onto the emulator's 64K RAM. It reads memory
+/// The editor is a live view at the emulator's 64K RAM. It reads memory
 /// directly for display and writes directly on keystrokes — no intermediate
 /// text buffer. The cursor operates on byte addresses, not on a string.
 #[derive(Debug)]
